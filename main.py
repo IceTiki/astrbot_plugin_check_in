@@ -31,48 +31,43 @@ from .qq_transport import (QQTransport, app_id_of, platform_name, send_status, s
 
 
 COMMAND_TOKEN = re.compile(r"(?:^|\s)[/／]?打卡(?=\s|$)")
-HELP = """\U0001f331 \u4e60\u60ef\u6253\u5361 v1.6
-/\u6253\u5361                  \u4eca\u65e5\u72b6\u6001\u3001\u5f97\u5206\u4e0e\u4ea4\u4e92\u6309\u94ae
-/\u6253\u5361 \u7761\u89c9             \u5b8c\u6210\u4efb\u52a1\uff0c\u4fdd\u5b58\u65f6\u95f4\u5e76\u5237\u65b0
-/\u6253\u5361 \u5de5\u4f5c\u4e00\u5c0f\u65f6 +1   \u8bb0\u5f55\u4e00\u6b21\uff08\u4e0d\u662f\u8ba1\u65f6\u5668\uff09
-/\u6253\u5361 7                \u6309\u5e8f\u53f7\u5b8c\u6210\u4e00\u6b21
-/\u6253\u5361 \u8bbe\u7f6e             \u67e5\u770b\u76ee\u6807\u3001\u65f6\u95f4\u3001\u5ef6\u8fdf\u3001\u6743\u91cd
-/\u6253\u5361 \u65f6\u95f4 \u7761\u89c9 23:30 30  \u6700\u4f73\u65f6\u95f4\u548c\u5ef6\u8fdf\u7a97\u53e3\uff08\u5206\u949f\uff09
-/\u6253\u5361 \u6700\u4f73 \u8d77\u5e8a 08:00    \u53ea\u4fee\u6539\u6700\u4f73\u65f6\u95f4
-/\u6253\u5361 \u5ef6\u8fdf \u8d77\u5e8a 30       \u53ea\u4fee\u6539\u5ef6\u8fdf\u7a97\u53e3
-/\u6253\u5361 \u65f6\u95f4 \u8fd0\u52a8 \u5173\u95ed      \u53d6\u6d88\u9650\u65f6\u8ba1\u5206
-/\u6253\u5361 \u6743\u91cd \u8fd0\u52a8 2        \u8bbe\u7f6e\u8be5\u4efb\u52a1\u6574\u5929\u7684\u6743\u91cd
-/\u6253\u5361 \u6743\u91cd \u8fd0\u52a8 0        \u6539\u4e3a\u53ef\u9009\uff0c\u4e0d\u5f71\u54cd\u5b8c\u6210\u5ea6
-/\u6253\u5361 \u76ee\u6807 \u5de5\u4f5c\u4e00\u5c0f\u65f6 3    \u4fee\u6539\u6b21\u6570\uff1b\u4e0d\u5b58\u5728\u5219\u521b\u5efa
-/\u6253\u5361 \u6dfb\u52a0 \u9605\u8bfb 1 0       \u65b0\u5efa\uff1a\u6b21\u6570 1\uff0c\u6743\u91cd 0
-/\u6253\u5361 \u5220\u9664 \u9605\u8bfb           \u505c\u7528\uff1b\u5386\u53f2\u4fdd\u7559
-/\u6253\u5361 \u6062\u590d \u9605\u8bfb           \u91cd\u65b0\u542f\u7528
-/\u6253\u5361 \u64a4\u9500 \u7761\u89c9           \u64a4\u9500\u5f53\u65e5\u8be5\u9879\u5168\u90e8\u6253\u5361
-/\u6253\u5361 \u8865\u7b7e \u7761\u89c9 \u6628\u5929 23:50 \u81ea\u62a5\u5b9e\u9645\u5b8c\u6210\u65f6\u95f4
-/\u6253\u5361 \u8bb0\u5f55 [\u4efb\u52a1] [\u65e5\u671f] \u67e5\u770b\u5b8c\u6210\u548c\u64cd\u4f5c\u65f6\u95f4
-/\u6253\u5361 \u6708\u5386 [\u4efb\u52a1] [YYYY-MM] \u52a0\u6743\u5b8c\u6210\u5ea6\u6708\u5386
-/\u6253\u5361 \u6587\u5b57\u6708\u5386           \u4e0d\u53d1\u9001\u56fe\u7247
-/\u6253\u5361 \u89c4\u5219               \u8ba1\u5206\u8bf4\u660e
-/\u6253\u5361 \u4ea4\u4e92 \u6309\u94ae|\u6587\u5b57\u94fe|\u81ea\u52a8|\u7eaf\u6587\u5b57
-/\u6253\u5361 \u8eab\u4efd | /\u6253\u5361 \u8bca\u65ad
-\u597d\u53cb\u3001\u6392\u884c\u3001\u9690\u79c1\u3001\u7ed1\u5b9a\u548c\u63d0\u9192\u529f\u80fd\u4fdd\u7559\u3002
-04:00 \u6362\u65e5\uff1b\u4fee\u6539\u89c4\u5219\u5f71\u54cd\u5f53\u5929\u53ca\u4ee5\u540e\uff0c\u4e0d\u6539\u5199\u5f80\u65e5\u3002"""
+HELP = """🌱 习惯打卡 v1.7
+/打卡                  今日状态、得分和交互按钮
+/打卡 睡觉             保存打卡时间，刷新今日状态
+/打卡 工作一小时 +1   记录一次工作（不是计时器）
+/打卡 7                按序号完成一次
+/打卡 设置             查看目标、最佳时间、半衰期和权重
+/打卡 时间 睡觉 23:30 30  设置最佳时间+半衰期（分钟）
+/打卡 最佳 起床 08:00    只修改最佳时间
+/打卡 半衰期 起床 30     只修改半衰期（旧命令「延迟」仍有效）
+/打卡 时间 运动 关闭      取消限时计分
+/打卡 权重 运动 0        设为可选，不影响总完成度
+/打卡 目标 工作一小时 3  修改每日目标次数
+/打卡 添加 阅读 1 0      添加一项权重0的任务
+/打卡 撤销 睡觉           撤销当天该任务所有记录
+/打卡 补签 睡觉 昨天 23:50  补签需要实际完成时间
+/打卡 记录 [任务] [日期]  查看打卡时间
+/打卡 月历 [任务] [YYYY-MM]  查看加权日历
+/打卡 规则               查看分数公式与计分约束
+/打卡 交互 按钮|文字链|自动|纯文字
+/打卡 身份 | /打卡 诊断
+其余好友、排行、隐私、绑定及提醒功能保留。
+凌晨04:00换日，已结束日期保留历史旧规则。"""
 
-RULE_HELP = """\U0001f4d0 \u8ba1\u5206\u89c4\u5219
-\u6bcf\u65e5\u8303\u56f4\uff1a04:00 \u81f3\u6b21\u65e5 03:59:59\uff08\u6309\u914d\u7f6e\u65f6\u533a\uff09\u3002
-\u6700\u4f73\u65f6\u95f4\u4e4b\u524d\u548c\u7b2c\u4e00\u4e2a\u5ef6\u8fdf\u7a97\u53e3\u5185\uff1a100%\u3002
-\u8d85\u51fa\u540e\u6bcf\u8fdb\u5165\u4e0b\u4e00\u4e2a\u7a97\u53e3\uff1a50%\u300125%\u300112.5%\u2026
-\u4f8b\uff1a\u7761\u89c9 23:30 +30\u5206\uff0c\u81f3\u6b21\u65e5 00:00:00 \u4ecd\u6ee1\u5206\uff1b
-00:00:01\uff5e00:30:00 \u4e3a50%\uff1b00:30:01\uff5e01:00:00 \u4e3a25%\u3002
-\u4efb\u52a1\u5f97\u5206 = \u6743\u91cd \u00d7 \u5404\u6b21\u6253\u5361\u65f6\u95f4\u7cfb\u6570\u4e4b\u548c / \u76ee\u6807\u6b21\u6570\u3002
-\u6b21\u6570\u8fbe\u6807\u540e\u4e0d\u518d\u52a0\u5206\uff1b\u591a\u6b21\u4efb\u52a1\u5168\u90e8\u5b8c\u6210\u5408\u8ba1\u53ea\u5360\u4e00\u4efd\u6743\u91cd\u3002
-\u65e5\u5b8c\u6210\u5ea6 = \u5f53\u5929\u5f97\u5206\u5408\u8ba1 / \u5f53\u5929\u6709\u6548\u6743\u91cd\u5408\u8ba1\u3002
-\u6708\u5b8c\u6210\u5ea6 = \u5df2\u7ecf\u8fc7\u7684\u6253\u5361\u65e5\u5f97\u5206\u5408\u8ba1 / \u5bf9\u5e94\u6709\u6548\u6743\u91cd\u5408\u8ba1\uff08\u542b\u4eca\u5929\uff09\u3002
-\u6743\u91cd0\u53ef\u8bb0\u5f55\u4f46\u4e0d\u52a0\u5206\u3001\u4e0d\u62c9\u4f4e\u5b8c\u6210\u5ea6\uff1b\u5168\u90e8\u4e3a0\u663e\u793a--\u3002
-\u672a\u542f\u7528\u65e5\u548c\u672a\u6765\u65e5\u4e0d\u8ba1\u5165\u6708\u5ea6\u5206\u6bcd\u3002
-\u8bbe\u7f6e\u5f53\u5929\u751f\u6548\uff0c\u5f53\u5929\u5df2\u6709\u8bb0\u5f55\u4f1a\u91cd\u7b97\uff0c\u5f80\u65e5\u7528\u5386\u53f2\u89c4\u5219\u3002
-\u5386\u53f2\u65e7\u6570\u636e\u4e0d\u8ffd\u6eaf\u6263\u5206\uff0c\u4e0d\u731c\u6d4b\u4e0d\u5b58\u5728\u7684\u5b8c\u6210\u65f6\u95f4\u3002
-\u6253\u5361\u4e0e\u8865\u7b7e\u5747\u4e3a\u81ea\u62a5\uff0c\u4e0d\u9a8c\u8bc1\u662f\u5426\u771f\u7684\u7761\u89c9\u6216\u5de5\u4f5c\u4e00\u5c0f\u65f6\u3002"""
+RULE_HELP = """📐 连续半衰期计分（v1.7）
+打卡日：04:00 至次日 03:59:59（配置时区）。
+提前或准时完成得100%；超过最佳时间后立即连续下降。
+每经过一个半衰期H，剩余得分降到一半；晚2H得25%，晚3H得12.5%。
+时间系数 = 2 ** (-迟到分钟 / H)，迟到分钟取 max(0, 实际时间-最佳时间)。
+例：睡觉最佳23:30、H=30分钟：23:45 得70.7%，次日00:00得50%，次日00:30得25%。
+任务得分 = 权重 × 目标次数内各次打卡时间系数之和 / 目标次数。
+每日完成度=当天累计得分/当天有效权重，月完成度按已计入日期累计。
+多次任务各次独立计分；权重为0可记录但不影响总分。
+任务达标后额外打卡不增加次数、不覆盖完成时间。
+修改设置从当前打卡日起生效，以前完成的日期继续沿用旧规则：
+v1.6 已结束日期使用原阶梯式扣分；历史旧数据不猜测不存在的时间。
+命令：/打卡 半衰期 睡觉 30；/打卡 时间 睡觉 23:30 30。
+此功能只记录自报完成时间，不验证真实睡眠或工作。"""
 
 
 class GroupDaka(Star):
@@ -98,16 +93,16 @@ class GroupDaka(Star):
         db_path = self.data_dir / "checkin.sqlite3"
         if db_path.is_file() and db_path.stat().st_size:
             with sqlite3.connect(db_path) as old:
-                if old.execute("PRAGMA user_version").fetchone()[0] < 10600:
+                if old.execute("PRAGMA user_version").fetchone()[0] < 10700:
                     backup_dir = Path(get_astrbot_data_path()) / "backups" / "astrbot_plugin_daka"
                     backup_dir.mkdir(parents=True, exist_ok=True)
-                    backup = backup_dir / f"pre-1.6-{datetime.now():%Y%m%d-%H%M%S-%f}.sqlite3"
+                    backup = backup_dir / f"pre-1.7-{datetime.now():%Y%m%d-%H%M%S-%f}.sqlite3"
                     with sqlite3.connect(backup) as copy:
                         old.backup(copy)
-                    logger.info("[daka 1.6] Pre-migration database snapshot: %s", backup)
+                    logger.info("[daka 1.7] Pre-migration database snapshot: %s", backup)
         self.store = ScoredStore(db_path, self.tz, clock=lambda: self._now())
         with self.store._db() as conn:
-            conn.execute("PRAGMA user_version=10600")
+            conn.execute("PRAGMA user_version=10700")
             conn.execute("CREATE TABLE IF NOT EXISTS ui_preferences ("
                          "scope TEXT NOT NULL, origin TEXT NOT NULL, mode TEXT NOT NULL, "
                          "PRIMARY KEY(scope, origin))")
@@ -359,13 +354,13 @@ class GroupDaka(Star):
                     caption = reply.split('\n', 1)[0] + '\n' + '\u52a0\u6743\u5b8c\u6210\u5ea6\uff08\u542b\u8fdf\u5230\u6263\u5206\uff09\uff1b04:00 \u6362\u65e5\u3002'
                     await transport.image(img, caption)
                     self._last_delivery[str(event.unified_msg_origin)] = {'mode': 'image', 'ack': True}
-                    logger.info('[daka 1.6] Calendar uploaded and media message accepted')
+                    logger.info('[daka 1.7] Calendar uploaded and media message accepted')
                 else:
                     await event.send(MessageChain().message(reply.split('\n', 1)[0]).file_image(img))
                 return
             except Exception as exc:
                 reason = safe_error(exc)
-                logger.warning('[daka 1.6] Calendar image failed: %s', reason)
+                logger.warning('[daka 1.7] Calendar image failed: %s', reason)
                 self._last_delivery[str(event.unified_msg_origin)] = {'mode': 'calendar-text', 'errors': [reason]}
                 reply = '⚠️ 月历图片发送失败，以下为文字月历。\n' + reply
         await self._send_plain(event, reply)
@@ -385,7 +380,7 @@ class GroupDaka(Star):
         sender, scope = self.store.SELF, ''
         reply, img = None, None
         calendar_request = False
-        logger.info('[daka 1.6] scene=%s command=%s', 'group' if is_group else 'c2c',
+        logger.info('[daka 1.7] scene=%s command=%s', 'group' if is_group else 'c2c',
                     command.split(' ', 1)[0] if command else 'today')
         try:
             try:
@@ -430,7 +425,7 @@ class GroupDaka(Star):
                         api_state = transport.ctx.scene + ' / bot.api available'
                     except Exception as exc:
                         api_state = safe_error(exc)
-                    reply = (f'🔍 打卡诊断 v1.6.0\n账户：{code}\n'
+                    reply = (f'🔍 打卡诊断 v1.7.0\n账户：{code}\n'
                              f'发送者指纹：{uid_code}\n'
                              f'模式：{self._ui_mode(scope, origin)}\n'
                              f'接口：{api_state}\n'
@@ -454,7 +449,7 @@ class GroupDaka(Star):
                 reply, img = f'⚠️ {exc}', None
                 calendar_request = False
             except Exception:
-                logger.exception('[daka 1.6] Command processing failed')
+                logger.exception('[daka 1.7] Command processing failed')
                 reply, img = '⚠️ 处理失败，请查看 AstrBot 日志。', None
                 calendar_request = False
 
@@ -469,7 +464,7 @@ class GroupDaka(Star):
                 except Exception as exc:
                     reason = safe_error(exc)
                     self._last_delivery[origin] = {'mode': 'astrbot-text-fallback', 'errors': [reason]}
-                    logger.warning('[daka 1.6] Interactive send failed: %s', reason)
+                    logger.warning('[daka 1.7] Interactive send failed: %s', reason)
                     await self._send_plain(event, reply)
             elif reply:
                 await self._send_plain(event, reply)
@@ -500,13 +495,13 @@ class GroupDaka(Star):
                 habits = [self.store.habit(scope, self._canonical_habit(scope, args[0]))]
             lines = ["\u2699\ufe0f \u4e2a\u4eba\u4efb\u52a1\u8bbe\u7f6e \u00b7 04:00 \u6362\u65e5"]
             for index, h in enumerate(habits, 1):
-                timed = f"\u6700\u4f73{h['best_time']} \u00b7 \u5ef6\u8fdf{h['delay_minutes']}\u5206" if h['best_time'] else "\u4e0d\u9650\u65f6"
+                timed = f"最佳{h['best_time']} · 半衰期{h['delay_minutes']}分" if h['best_time'] else "\u4e0d\u9650\u65f6"
                 lines.append(f"{index}. {h['name']} \u00b7 {h['target']}\u6b21/\u65e5 \u00b7 \u6743\u91cd{fmt_number(h['weight'])}\n   {timed}")
-            lines.append("\n/\u6253\u5361 \u65f6\u95f4 \u7761\u89c9 23:30 30\n/\u6253\u5361 \u6743\u91cd \u8fd0\u52a8 0\n/\u6253\u5361 \u89c4\u5219")
+            lines.append("\n/打卡 时间 睡觉 23:30 30\n/打卡 半衰期 睡觉 30\n/\u6253\u5361 \u6743\u91cd \u8fd0\u52a8 0\n/\u6253\u5361 \u89c4\u5219")
             lines.append("\u4fee\u6539\u5f71\u54cd\u5f53\u5929\u53ca\u4ee5\u540e\uff0c\u4e0d\u6539\u5199\u5f80\u65e5\u3002")
             return "\n".join(lines), None
 
-        schedule = action in ("\u6700\u4f73", "\u5ef6\u8fdf", "\u6743\u91cd", "\u65f6\u6bb5") or (action == "\u65f6\u95f4" and len(args) >= 2 and
+        schedule = action in ("\u6700\u4f73", "\u5ef6\u8fdf", "半衰期", "\u6743\u91cd", "\u65f6\u6bb5") or (action == "\u65f6\u95f4" and len(args) >= 2 and
                    (":" in args[1] or args[1] == "\u5173\u95ed"))
         if schedule:
             if len(args) < 2:
@@ -514,7 +509,7 @@ class GroupDaka(Star):
             name = self._canonical_habit(scope, args[0])
             if action == "\u6743\u91cd" and len(args) == 2:
                 self.store.configure(scope, name, weight=validate_weight(args[1]))
-            elif action == "\u5ef6\u8fdf" and len(args) == 2:
+            elif action in ("\u5ef6\u8fdf", "半衰期") and len(args) == 2:
                 self.store.configure(scope, name, delay_minutes=validate_delay(args[1]))
             elif action == "\u6700\u4f73" and len(args) == 2:
                 self.store.configure(scope, name, best_time=validate_clock(args[1]))
@@ -738,6 +733,6 @@ class GroupDaka(Star):
         try:
             image = render_weighted(path, year, month, days, stats, today, name, habit_name)
         except Exception as exc:
-            logger.warning('[daka 1.6] Calendar render failed: %s', safe_error(exc))
+            logger.warning('[daka 1.7] Calendar render failed: %s', safe_error(exc))
             image = None
         return text, image

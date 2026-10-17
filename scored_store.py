@@ -37,16 +37,40 @@ class ScoredStore(AccountCheckinStore):
                     weight REAL NOT NULL CHECK(weight >= 0 AND weight <= 1000),
                     best_time TEXT, delay_minutes INTEGER NOT NULL DEFAULT 30,
                     enabled INTEGER NOT NULL, sort_order INTEGER NOT NULL,
-                    model TEXT NOT NULL DEFAULT 'weighted',
+                    model TEXT NOT NULL DEFAULT 'half_life',
                     PRIMARY KEY(scope,name,since_day)
                 );
                 CREATE INDEX IF NOT EXISTS idx_habit_rules_date
                 ON habit_rules(scope,since_day,name);
             """)
+            conn.execute("CREATE TABLE IF NOT EXISTS score_engine_migrations ("
+                         "name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)")
             scopes = [r[0] for r in conn.execute("SELECT scope FROM groups WHERE scope LIKE 'person:%'")]
         # Version-aware backup is performed by main.py before this constructor.
         for scope in scopes:
             self.ensure_rules(scope)
+        self._migrate_half_life_once()
+
+    def _migrate_half_life_once(self):
+        """Transition only the current check-in day; previous rules stay frozen.
+
+        A database-wide marker prevents re-scoring future days on each reboot.
+        First-time personal accounts start directly with the new rule model.
+        """
+        today = self.today()
+        with self._db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if conn.execute("SELECT 1 FROM score_engine_migrations WHERE name=?",
+                            ("v1.7-half-life",)).fetchone():
+                return
+            scopes = [r[0] for r in conn.execute("SELECT scope FROM score_profiles")]
+            for scope in scopes:
+                for rule in self._rules_locked(conn, scope, today, include_disabled=True):
+                    if rule["model"] == "weighted":
+                        rule["model"] = "half_life"
+                        self._write_locked(conn, scope, rule, today)
+            conn.execute("INSERT INTO score_engine_migrations VALUES (?,?)",
+                         ("v1.7-half-life", self.clock().isoformat(timespec="seconds")))
 
     def today(self):
         return business_day(self.clock().astimezone(self.tz))
@@ -130,17 +154,17 @@ class ScoredStore(AccountCheckinStore):
                 elif oldrow and newrow:
                     # Keep ambiguous old/new histories separate instead of adding them.
                     rule = self._rule_locked(conn, scope, old, cutover, allow_disabled=True)
-                    self._write_locked(conn, scope, dict(rule, enabled=0, model="weighted"), cutover)
-            # Every surviving custom task gets the same weighted model, once.
+                    self._write_locked(conn, scope, dict(rule, enabled=0, model="half_life"), cutover)
+            # Existing custom tasks receive the half-life model from cutover.
             for r in self._rules_locked(conn, scope, cutover, include_disabled=True):
-                self._write_locked(conn, scope, dict(r, model="weighted"), cutover)
+                self._write_locked(conn, scope, dict(r, model="half_life"), cutover)
             for order, (name, target, best, delay) in enumerate(DEFAULT_RULES):
                 conn.execute("INSERT OR IGNORE INTO habits(scope,name,target,created_by,created_at) "
                              "VALUES (?,?,?,'__system__',?)",
                              (scope, name, target, self.clock().isoformat(timespec="seconds")))
                 self._write_locked(conn, scope, {"name": name, "target": target, "weight": 1.0,
                                    "best_time": best, "delay_minutes": delay, "enabled": 1,
-                                   "sort_order": order, "model": "weighted"}, cutover)
+                                   "sort_order": order, "model": "half_life"}, cutover)
             water = conn.execute("SELECT created_by FROM habits WHERE scope=? AND name=?",
                                  (scope, "\u559d\u6c34")).fetchone()
             if water and water["created_by"] == "__system__":
@@ -176,7 +200,7 @@ class ScoredStore(AccountCheckinStore):
     def _write_locked(conn, scope, r, day):
         conn.execute("INSERT OR REPLACE INTO habit_rules VALUES (?,?,?,?,?,?,?,?,?,?)",
                      (scope, r["name"], day.isoformat(), r["target"], r["weight"], r["best_time"],
-                      r["delay_minutes"], r["enabled"], r["sort_order"], r.get("model", "weighted")))
+                      r["delay_minutes"], r["enabled"], r["sort_order"], r.get("model", "half_life")))
         conn.execute("UPDATE habits SET target=?,enabled=? WHERE scope=? AND name=?",
                      (r["target"], r["enabled"], scope, r["name"]))
 
@@ -219,7 +243,7 @@ class ScoredStore(AccountCheckinStore):
                     r[k] = v
             if best_time is not UNSET:
                 r["best_time"] = best_time
-            r["model"] = "weighted"
+            r["model"] = "half_life"
             self._write_locked(conn, scope, r, day)
         return r
 
@@ -232,7 +256,7 @@ class ScoredStore(AccountCheckinStore):
                                  (scope,)).fetchone()[0]
             self._write_locked(conn, scope, {"name": name, "target": target, "weight": 1.0,
                                "best_time": None, "delay_minutes": 30, "enabled": 1,
-                               "sort_order": order, "model": "weighted"}, self.today())
+                               "sort_order": order, "model": "half_life"}, self.today())
 
     def delete_habit(self, scope, name, user_id, is_admin):
         # Each person is the owner of their own task list, regardless of scene.

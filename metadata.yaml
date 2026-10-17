@@ -2,7 +2,7 @@ name: astrbot_plugin_daka
 display_name: 习惯打卡
 desc: "04:00 \u6362\u65e5\u3001\u9650\u65f6\u6253\u5361\u6298\u5206\u3001\u6743\u91cd\u6708\u5386\u3001QQ \u6309\u94ae\u548c\u7edf\u4e00\u4e2a\u4eba\u8bb0\u5f55"
 author: local-community
-version: 1.6.0
+version: 1.7.0
 astrbot_version: ">=4.17.0"
 support_platforms:
   - aiocqhttp

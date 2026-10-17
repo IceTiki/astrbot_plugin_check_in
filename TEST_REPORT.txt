@@ -1,17 +1,10 @@
-AstrBot daka v1.6.0 - offline regression report
-Date: 2026-10-17
-Python: 3.13.5
-Pillow: 12.3.0; the user's Pillow 13 was NOT tested locally.
-Command: python -m pytest astrbot_plugin_daka/tests -q --disable-warnings
-SQLite, migration and Pillow rendering: executed locally on real test files.
-AstrBot/QQ events and HTTP: contract fixtures, not a live QQ integration.
-Docker updater: simulated CLI; no action on the user's host.
-Updated original v1.5 default-task/layout assertions to reflect the requested seven tasks.
-New coverage: 04:00 and month/year rollover; inclusive grace boundaries; per-click late factors;
-partial counts, weights, zero denominators; dated rule revisions; legacy migration;
-actual vs submitted backfill times; concurrent capped check-ins; native panel payloads;
-monthly image generation; 300 deterministic randomized score-bound checks.
+AstrBot habit check-in v1.7.0 -- offline regression summary
 
-........................................................................ [ 56%]
-........................................................                 [100%]
-128 passed in 5.41s
+2026-10-18
+146 pytest tests passed (see tests/test_regressions.py, test_v16_scoring.py, test_v17_half_life.py).
+Coverage includes continuous half-life from best time, exact 50% at H, 
+previous-day v1.6 stepped score retention, current-day migration, repeated
+check-in partial weights, midnight 04:00 boundary, QQ mock message flow,
+SQLite account management, and safety of unchanged commands.
+QQ official platform endpoint behavior is simulated, not live-verified.
+Production AstrBot deployment and user data not accessed or modified.

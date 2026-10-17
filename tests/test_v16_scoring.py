@@ -76,8 +76,8 @@ def test_naive_business_day_rejected():
     (dt(18,0,30,0),.5), (dt(18,0,30,1),.25), (dt(18,1,0),.25),
     (dt(18,1,0,1),.125),
 ])
-def test_sleep_delay_inclusive_boundaries(when,factor):
-    assert late_factor(D,'23:30',30,when,Z)==factor
+def test_v16_old_step_delay_inclusive_boundaries(when,factor):
+    assert late_factor(D,'23:30',30,when,Z,model='weighted')==factor
 
 
 @pytest.mark.parametrize('clock,when,factor', [
@@ -85,8 +85,8 @@ def test_sleep_delay_inclusive_boundaries(when,factor):
     ('08:00',dt(17,8,30,1),.5),('08:00',dt(17,9,0,1),.25),
     ('00:00',dt(18,0,30),1),('00:00',dt(18,0,30,1),.5),
 ])
-def test_other_targets_and_midnight_anchor(clock,when,factor):
-    assert late_factor(D,clock,30,when,Z)==factor
+def test_v16_old_step_other_targets_and_midnight_anchor(clock,when,factor):
+    assert late_factor(D,clock,30,when,Z,model='weighted')==factor
 
 
 def test_before_four_clock_is_next_day():
@@ -130,8 +130,8 @@ def test_late_task_penalty_does_not_half_every_other_task(system):
         record(db,scope,name,when,3 if name==WORK else 1)
     stats=summarize(db.daily(scope,'self',D))
     assert stats['finished']==7
-    assert stats['earned']==6.5 and stats['weight']==7
-    assert stats['ratio']==pytest.approx(6.5/7)
+    assert stats['earned']==pytest.approx(6+2**(-1.5)) and stats['weight']==7
+    assert stats['ratio']==pytest.approx((6+2**(-1.5))/7)
     assert not stats['full_score']
 
 
@@ -184,12 +184,12 @@ def test_yesterday_rules_frozen_today_change_immediate(system):
     clock[0]=dt(18,9)
     db.configure(scope,WAKE,best_time='09:00',weight=2)
     record(db,scope,WAKE,clock[0])
-    assert item(db,scope,WAKE,D)['earned']==.5
+    assert item(db,scope,WAKE,D)['earned']==pytest.approx(2**(-1.5))
     assert item(db,scope,WAKE,date(2026,10,18))['earned']==2
     # Same-day edit re-scores current day's earlier event.
     db.configure(scope,WAKE,best_time='08:00')
-    assert item(db,scope,WAKE,date(2026,10,18))['earned']==1
-    assert item(db,scope,WAKE,D)['earned']==.5
+    assert item(db,scope,WAKE,date(2026,10,18))['earned']==pytest.approx(2*2**(-2))
+    assert item(db,scope,WAKE,D)['earned']==pytest.approx(2**(-1.5))
 
 
 def test_month_aggregate_is_points_over_weights_not_average_of_ratios(system):
@@ -220,7 +220,7 @@ def test_late_repeat_weight_average_not_whole_task_last_timestamp(system):
     record(db,scope,WORK,dt(17,18,45))
     record(db,scope,WORK,dt(17,19,15))
     i=item(db,scope,WORK)
-    assert i['earned']==pytest.approx((1+.5+.25)/3)
+    assert i['earned']==pytest.approx((1+2**(-1.5)+2**(-2.5))/3)
     assert i['complete']
 
 
@@ -230,7 +230,7 @@ def test_backfill_timed_task_requires_declared_time(system):
     with pytest.raises(HabitError):
         db.checkin(scope,'self',SLEEP,D,checked_at=clock[0],kind='backfill')
     db.checkin(scope,'self',SLEEP,D,checked_at=clock[0],kind='backfill',occurred_at=dt(18,0,15))
-    assert item(db,scope,SLEEP)['earned']==.5
+    assert item(db,scope,SLEEP)['earned']==pytest.approx(2**(-1.5))
     e=db.checkin_times(scope,'self',D,SLEEP)[0]
     assert e['checked_at']!=e['occurred_at']
     assert e['kind']=='backfill'
@@ -312,7 +312,7 @@ def test_current_day_legacy_known_time_can_use_new_rule(tmp_path):
     account=resolve(old); scope=old.person_scope(account)
     old.checkin(scope,'self',OLD_WAKE,D,checked_at=dt(17,8,45))
     new=ScoredStore(path,Z,clock=lambda:dt(17,21))
-    assert item(new,scope,WAKE)['earned']==.5
+    assert item(new,scope,WAKE)['earned']==pytest.approx(2**(-1.5))
 
 
 def test_unknown_legacy_time_is_not_fabricated(system):
@@ -333,7 +333,7 @@ def test_merge_copies_new_rules_and_actual_backfill_times(tmp_path):
     db.checkin(sb,'self',READ,D,1,checked_at=clock[0],kind='backfill',occurred_at=dt(17,18,40))
     db.merge_persons(a,b)
     i=item(db,sa,READ)
-    assert i['weight']==.25 and i['earned']==pytest.approx(.25*.5/2)
+    assert i['weight']==.25 and i['earned']==pytest.approx(.25*2**(-40/30)/2)
     assert db.checkin_times(sa,'self',D,READ)[0]['occurred_at']==dt(17,18,40).isoformat()
 
 
@@ -353,7 +353,7 @@ def test_commands_update_time_weight_target_and_optional_add(plugin):
     assert plugin.store.habit(scope,WORK)['target']==4
 
 
-def test_disabled_timing_command_and_repeat_default_grace(plugin):
+def test_disabled_timing_command_and_repeat_default_half_life(plugin):
     asyncio.run(plugin.daka_command(Event('\u65f6\u95f4 '+SLEEP+' \u5173\u95ed')))
     scope=plugin.store.person_scope(resolve(plugin.store))
     assert plugin.store.habit(scope,SLEEP)['best_time'] is None
@@ -402,7 +402,7 @@ def test_real_handler_four_am_rollover_and_month_choice(plugin,monkeypatch):
     monkeypatch.setattr(plugin,'_now',lambda:dt(18,0,15))
     monkeypatch.setattr(plugin,'_today',lambda:business_day(plugin._now()))
     e=Event(SLEEP);asyncio.run(plugin.daka_command(e))
-    assert item(plugin.store,scope,SLEEP,D)['earned']==.5
+    assert item(plugin.store,scope,SLEEP,D)['earned']==pytest.approx(2**(-1.5))
     assert item(plugin.store,scope,SLEEP,D)['last_at']==dt(18,0,15).isoformat()
     monkeypatch.setattr(plugin,'_now',lambda:dt(18,4))
     e=Event();asyncio.run(plugin.daka_command(e))
@@ -416,7 +416,7 @@ def test_backfill_command_records_actual_and_submission(plugin,monkeypatch):
     monkeypatch.setattr(plugin,'_today',lambda:date(2026,10,18))
     e=Event('\u8865\u7b7e '+SLEEP+' \u6628\u5929 00:10')
     asyncio.run(plugin.daka_command(e))
-    assert item(plugin.store,scope,SLEEP,D)['earned']==.5
+    assert item(plugin.store,scope,SLEEP,D)['earned']==pytest.approx(2**(-40/30))
     e=Event('\u8bb0\u5f55 '+SLEEP+' \u6628\u5929');asyncio.run(plugin.daka_command(e))
     text=e.sent[0].parts[0][1]
     assert '00:10:00' in text and '10:00:00' in text
@@ -440,7 +440,7 @@ def test_complete_but_penalized_panel_does_not_claim_perfect(system):
         when=dt(18,0,15) if name==SLEEP else at_clock(D,best,Z) if best else dt()
         record(db,scope,name,when,target)
     panel=daily_panel(db.daily(scope,'self',D),'test',D,dt(18,0,15),Z)
-    assert '92.9%' in panel and '6.5/7' in panel
+    assert '90.8%' in panel and '6.35/7' in panel
     assert '\u8fdf\u5230' in panel and '04:00' in panel
 
 

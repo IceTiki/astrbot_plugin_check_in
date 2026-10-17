@@ -2,8 +2,9 @@
 
 Business day: [04:00, next day 04:00), in the configured local timezone.
 A time target before 04:00 belongs to the END of that business day.
-The first delay interval is a grace interval (inclusive right boundary).
-Each started interval after that halves the credited portion, not other tasks.
+For new rules, credit decays continuously immediately after the best time:
+one configured half-life (the former delay_minutes setting) leaves 50% credit.
+Old weighted rule snapshots retain the v1.6 step/grace behavior.
 """
 from __future__ import annotations
 
@@ -46,9 +47,9 @@ def validate_delay(raw: str | int) -> int:
     try:
         value = int(raw)
     except (ValueError, TypeError) as exc:
-        raise HabitError("\u5ef6\u8fdf\u7a97\u53e3\u5fc5\u987b\u662f\u6574\u6570\u5206\u949f\u3002") from exc
+        raise HabitError("半衰期必须是整数分钟。") from exc
     if not 1 <= value <= 1440:
-        raise HabitError("\u5ef6\u8fdf\u7a97\u53e3\u9700\u8981\u5728 1\uff5e1440 \u5206\u949f\u4e4b\u95f4\u3002")
+        raise HabitError("半衰期需要在 1～1440 分钟之间。")
     return value
 
 
@@ -83,15 +84,27 @@ def parse_backfill_time(day: date, raw: str, tz: ZoneInfo, now: datetime) -> dat
 
 
 def late_factor(day: date, best_time: str | None, delay_minutes: int,
-                occurred_at: datetime | None, tz: ZoneInfo) -> float:
+                occurred_at: datetime | None, tz: ZoneInfo,
+                model: str = "half_life") -> float:
+    """Continuous half-life scoring, retaining old step rules for past dates.
+
+    ``delay_minutes`` is the persisted setting name for compatibility, but for
+    ``half_life`` it means minutes from the best time until score reaches 50%.
+    No plateau/grace window: 1 second after best time is already below 100%.
+    """
     if best_time is None or occurred_at is None:
         return 1.0
     if occurred_at.tzinfo is None:
         occurred_at = occurred_at.replace(tzinfo=tz)
     best = at_clock(day, best_time, tz)
     seconds = (occurred_at.astimezone(tz) - best).total_seconds()
-    steps = max(0, math.ceil(seconds / (validate_delay(delay_minutes) * 60)) - 1)
-    return math.ldexp(1.0, -min(steps, 1075))
+    if seconds <= 0:
+        return 1.0
+    half_life_seconds = validate_delay(delay_minutes) * 60
+    if model == "weighted":  # v1.6 snapshots: first window full, then steps
+        steps = max(0, math.ceil(seconds / half_life_seconds) - 1)
+        return math.ldexp(1.0, -min(steps, 1075))
+    return math.exp2(-seconds / half_life_seconds)
 
 
 def _parse_stamp(raw, tz):
@@ -130,7 +143,8 @@ def score_item(rule: dict, amount: int, events: list[dict], day: date,
         occurred = _parse_stamp(raw, tz)
         if occurred is None and rule.get("best_time"):
             unknown = True
-        factor = late_factor(day, rule.get("best_time"), rule["delay_minutes"], occurred, tz)
+        factor = late_factor(day, rule.get("best_time"), rule["delay_minutes"], occurred, tz,
+                             model=rule.get("model", "half_life"))
         contributions.append(take * factor)
         if occurred is not None:
             actuals.append(occurred)

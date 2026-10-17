@@ -7,11 +7,15 @@ def timing_line(item, day, now, tz):
     if not item.get("best_time"):
         return ""
     best = at_clock(day, item["best_time"], tz)
-    until = best + timedelta(minutes=item["delay_minutes"])
-    suffix = ("\u6b21\u65e5" if until.date() > day else "") + until.strftime("%H:%M")
-    line = f"\u6700\u4f73 {item['best_time']} \u00b7 \u5ef6\u8fdf {item['delay_minutes']}\u5206\uff08\u81f3{suffix}\uff09"
+    half_point = best + timedelta(minutes=item["delay_minutes"])
+    suffix = ("次日" if half_point.date() > day else "") + half_point.strftime("%H:%M")
+    if item.get("model") == "weighted":
+        line = f"最佳 {item['best_time']} · 旧版延迟窗口 {item['delay_minutes']}分（至{suffix}仍满分）"
+    else:
+        line = f"最佳 {item['best_time']} · 半衰期 {item['delay_minutes']}分（{suffix}降至50%）"
     if not item["complete"]:
-        factor = late_factor(day, item["best_time"], item["delay_minutes"], now, tz)
+        factor = late_factor(day, item["best_time"], item["delay_minutes"], now, tz,
+                             model=item.get("model", "half_life"))
         if factor < 1:
             line += f" \u00b7 \u73b0\u5728\u5f97\u5206{fmt_percent(factor)}"
     return line
