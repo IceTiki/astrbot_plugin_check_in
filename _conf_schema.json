@@ -1,0 +1,32 @@
+{
+  "timezone": {
+    "description": "时间与打卡日使用的时区；每日 04:00 换日（默认 Asia/Shanghai）",
+    "type": "string",
+    "default": "Asia/Shanghai"
+  },
+  "max_habits_per_group": {
+    "description": "每人最多习惯数（含默认七项，7～64；沿用旧配置名以保持兼容）",
+    "type": "int",
+    "default": 64
+  },
+  "max_backfill_days": {
+    "description": "最多允许补签过去多少天",
+    "type": "int",
+    "default": 14
+  },
+  "allow_member_add": {
+    "description": "是否允许普通用户为自己的账户新增个人习惯（兼容旧设置）",
+    "type": "bool",
+    "default": true
+  },
+  "qq_buttons_enabled": {
+    "description": "开启QQ原生指令按钮尝试；关闭后自动模式仍尝试原生文字链。群聊需点击后手动发送。",
+    "type": "bool",
+    "default": true
+  },
+  "interaction_mode": {
+    "description": "默认交互模式：auto按钮/文字链/文本回退；keyboard优先按钮；links原生文字链；text纯文字。可用 /打卡 交互 文字链 单独切换。",
+    "type": "string",
+    "default": "auto"
+  }
+}
