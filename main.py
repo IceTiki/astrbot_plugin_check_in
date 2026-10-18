@@ -20,6 +20,7 @@ from astrbot.api.star import Context, Star
 from astrbot.core.utils.astrbot_path import get_astrbot_data_path
 
 from .calendar_image import cache_file
+from .daily_image import render_daily_panel
 from .store import HabitError, validate_day, validate_month
 from .accounts import identity_aliases
 from .scored_store import ScoredStore
@@ -31,8 +32,8 @@ from .qq_transport import (QQTransport, app_id_of, platform_name, send_status, s
 
 
 COMMAND_TOKEN = re.compile(r"(?:^|\s)[/／]?打卡(?=\s|$)")
-HELP = """🌱 习惯打卡 v1.7
-/打卡                  今日状态、得分和交互按钮
+HELP = """🌱 习惯打卡 v1.8
+/打卡                  今日图片状态、得分和交互按钮
 /打卡 睡觉             保存打卡时间，刷新今日状态
 /打卡 工作一小时 +1   记录一次工作（不是计时器）
 /打卡 7                按序号完成一次
@@ -50,6 +51,8 @@ HELP = """🌱 习惯打卡 v1.7
 /打卡 月历 [任务] [YYYY-MM]  查看加权日历
 /打卡 规则               查看分数公式与计分约束
 /打卡 交互 按钮|文字链|自动|纯文字
+/打卡 视图 图片|文字
+/打卡 月历视图 图片|文字
 /打卡 身份 | /打卡 诊断
 其余好友、排行、隐私、绑定及提醒功能保留。
 凌晨04:00换日，已结束日期保留历史旧规则。"""
@@ -87,6 +90,12 @@ class GroupDaka(Star):
         self.interaction_mode = str(self.config.get("interaction_mode", "auto"))
         if self.interaction_mode not in ("auto", "keyboard", "links", "text"):
             self.interaction_mode = "auto"
+        self.daily_display_mode = str(self.config.get("daily_display_mode", "image")).lower()
+        if self.daily_display_mode not in ("image", "text"):
+            self.daily_display_mode = "image"
+        self.month_display_mode = str(self.config.get("month_display_mode", "image")).lower()
+        if self.month_display_mode not in ("image", "text"):
+            self.month_display_mode = "image"
         self._last_delivery = {}
         self.data_dir = Path(get_astrbot_data_path()) / "plugin_data" / "astrbot_plugin_daka"
         self.data_dir.mkdir(parents=True, exist_ok=True)
@@ -106,6 +115,11 @@ class GroupDaka(Star):
             conn.execute("CREATE TABLE IF NOT EXISTS ui_preferences ("
                          "scope TEXT NOT NULL, origin TEXT NOT NULL, mode TEXT NOT NULL, "
                          "PRIMARY KEY(scope, origin))")
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(ui_preferences)")}
+            if "daily_view_mode" not in columns:
+                conn.execute("ALTER TABLE ui_preferences ADD COLUMN daily_view_mode TEXT")
+            if "month_view_mode" not in columns:
+                conn.execute("ALTER TABLE ui_preferences ADD COLUMN month_view_mode TEXT")
         self._reminder_task: asyncio.Task | None = None
 
     def _today(self) -> date:
@@ -194,6 +208,101 @@ class GroupDaka(Star):
 
     def _daily_status(self, scope, sender, nick, today):
         return daily_panel(self.store.daily(scope, sender, today), nick, today, self._now(), self.tz)
+
+    def _display_mode(self, scope: str, origin: str, kind: str) -> str:
+        columns = {"daily": "daily_view_mode", "month": "month_view_mode"}
+        if kind not in columns:
+            raise ValueError("unknown display mode")
+        column = columns[kind]
+        with self.store._db() as conn:
+            row = conn.execute(
+                f"SELECT {column} FROM ui_preferences WHERE scope=? AND origin=?",
+                (scope, origin),
+            ).fetchone()
+        value = row[column] if row else None
+        if value in ("image", "text"):
+            return value
+        return self.daily_display_mode if kind == "daily" else self.month_display_mode
+
+    def _set_display_mode(self, scope: str, origin: str, kind: str, mode: str):
+        columns = {"daily": "daily_view_mode", "month": "month_view_mode"}
+        if kind not in columns or mode not in ("image", "text"):
+            raise ValueError("invalid display preference")
+        column = columns[kind]
+        with self.store._db() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO ui_preferences(scope,origin,mode) VALUES (?,?,?)",
+                (scope, origin, self.interaction_mode),
+            )
+            conn.execute(
+                f"UPDATE ui_preferences SET {column}=? WHERE scope=? AND origin=?",
+                (mode, scope, origin),
+            )
+
+    def _make_daily_image(self, scope, sender, nick, today):
+        items = self.store.daily(scope, sender, today)
+        path = cache_file(self.data_dir / "cache", scope, sender, today.isoformat(), "daily-v180")
+        try:
+            return render_daily_panel(path, items, nick, today, self._now(), self.tz)
+        except Exception as exc:
+            logger.warning("[daka 1.8] Daily image render failed: %s", safe_error(exc))
+            return None
+
+    def _daily_caption(self, reply, items, today):
+        stats = summarize(items)
+        prefix = str(reply).split("\n\n", 1)[0].splitlines()[0][:100]
+        summary = (f"{fmt_percent(stats['ratio'])} · {fmt_number(stats['earned'])}/"
+                   f"{fmt_number(stats['weight'])} · {stats['required_finished']}/"
+                   f"{stats['required_total']} 项")
+        return (prefix + "\n" + summary)[:580]
+
+    async def _send_daily_image(self, event, reply, img, scope, sender, nick, today):
+        items = self.store.daily(scope, sender, today)
+        stats = summarize(items)
+        caption = self._daily_caption(reply, items, today)
+        origin = str(event.unified_msg_origin)
+        adapter_type = platform_name(event)
+        if adapter_type in OFFICIAL:
+            transport = QQTransport(event)
+            try:
+                await transport.image(img, caption)
+            except Exception as exc:
+                reason = safe_error(exc)
+                logger.warning("[daka 1.8] Daily image upload failed: %s", reason)
+                self._last_delivery[origin] = {"mode": "text-fallback", "errors": [reason]}
+                try:
+                    report = await send_status(event, reply, items, self._ui_mode(scope, origin),
+                                               logger.info, transport=transport)
+                    self._last_delivery[origin] = report
+                except Exception as send_exc:
+                    logger.warning("[daka 1.8] Daily text fallback failed: %s", safe_error(send_exc))
+                    await self._send_plain(event, reply)
+                return
+
+            short = (f"{fmt_percent(stats['ratio'])} · {fmt_number(stats['earned'])}/"
+                     f"{fmt_number(stats['weight'])} 分 · {stats['required_finished']}/"
+                     f"{stats['required_total']} 项\n"
+                     "点下方按钮打卡；文字版 /打卡 视图 文字")
+            try:
+                report = await send_status(event, short, items, self._ui_mode(scope, origin),
+                                           logger.info, transport=transport)
+                report["image"] = "accepted"
+                self._last_delivery[origin] = report
+            except Exception as exc:
+                reason = safe_error(exc)
+                logger.warning("[daka 1.8] Daily button message failed: %s", reason)
+                self._last_delivery[origin] = {"mode": "image+text", "errors": [reason]}
+                await self._send_plain(event, short)
+            return
+
+        try:
+            await event.send(MessageChain().message(caption).file_image(img))
+            self._last_delivery[origin] = {"mode": "image", "ack": True}
+        except Exception as exc:
+            reason = safe_error(exc)
+            logger.warning("[daka 1.8] Daily image send failed: %s", reason)
+            self._last_delivery[origin] = {"mode": "text-fallback", "errors": [reason]}
+            await self._send_plain(event, reply)
 
     def _canonical_habit(self, scope, name):
         if name in RENAMES:
@@ -354,13 +463,13 @@ class GroupDaka(Star):
                     caption = reply.split('\n', 1)[0] + '\n' + '\u52a0\u6743\u5b8c\u6210\u5ea6\uff08\u542b\u8fdf\u5230\u6263\u5206\uff09\uff1b04:00 \u6362\u65e5\u3002'
                     await transport.image(img, caption)
                     self._last_delivery[str(event.unified_msg_origin)] = {'mode': 'image', 'ack': True}
-                    logger.info('[daka 1.7] Calendar uploaded and media message accepted')
+                    logger.info('[daka 1.8] Calendar uploaded and media message accepted')
                 else:
                     await event.send(MessageChain().message(reply.split('\n', 1)[0]).file_image(img))
                 return
             except Exception as exc:
                 reason = safe_error(exc)
-                logger.warning('[daka 1.7] Calendar image failed: %s', reason)
+                logger.warning('[daka 1.8] Calendar image failed: %s', reason)
                 self._last_delivery[str(event.unified_msg_origin)] = {'mode': 'calendar-text', 'errors': [reason]}
                 reply = '⚠️ 月历图片发送失败，以下为文字月历。\n' + reply
         await self._send_plain(event, reply)
@@ -380,7 +489,7 @@ class GroupDaka(Star):
         sender, scope = self.store.SELF, ''
         reply, img = None, None
         calendar_request = False
-        logger.info('[daka 1.7] scene=%s command=%s', 'group' if is_group else 'c2c',
+        logger.info('[daka 1.8] scene=%s command=%s', 'group' if is_group else 'c2c',
                     command.split(' ', 1)[0] if command else 'today')
         try:
             try:
@@ -402,7 +511,20 @@ class GroupDaka(Star):
                 action = parts[0] if parts else ''
                 code = hashlib.sha256(account_id.encode()).hexdigest()[:10]
                 uid_code = hashlib.sha256(raw_sender.encode()).hexdigest()[:10]
-                if action in ('绑定', '解绑'):
+                if action in ('视图', '显示'):
+                    modes = {'图片': 'image', '文字': 'text'}
+                    if len(parts) != 2 or parts[1] not in modes:
+                        raise HabitError('用法：/打卡 视图 图片|文字')
+                    self._set_display_mode(scope, origin, 'daily', modes[parts[1]])
+                    reply = self._daily_status(scope, sender, nick, self._today())
+                elif action in ('月历视图', '月历样式', '月历展示'):
+                    modes = {'图片': 'image', '文字': 'text'}
+                    if len(parts) != 2 or parts[1] not in modes:
+                        raise HabitError('用法：/打卡 月历视图 图片|文字')
+                    self._set_display_mode(scope, origin, 'month', modes[parts[1]])
+                    label = '图片' if modes[parts[1]] == 'image' else '文字'
+                    reply = f'✅ 月历展示已切换为{label}模式。发送 /打卡 月历 查看。'
+                elif action in ('绑定', '解绑'):
                     reply = self._binding_command(command, origin, raw_sender, is_group,
                                                   union_openid, nick, adapter_type, app_id)
                 elif command in ('身份', '账户', '绑定状态'):
@@ -425,7 +547,7 @@ class GroupDaka(Star):
                         api_state = transport.ctx.scene + ' / bot.api available'
                     except Exception as exc:
                         api_state = safe_error(exc)
-                    reply = (f'🔍 打卡诊断 v1.7.0\n账户：{code}\n'
+                    reply = (f'🔍 打卡诊断 v1.8.0\n账户：{code}\n'
                              f'发送者指纹：{uid_code}\n'
                              f'模式：{self._ui_mode(scope, origin)}\n'
                              f'接口：{api_state}\n'
@@ -443,18 +565,35 @@ class GroupDaka(Star):
                     reply, img = self._dispatch(command, scope, sender, nick,
                                                 self._is_admin(event), is_group,
                                                 social_scope, account_id)
-                    if text_calendar:
+                    if text_calendar or (calendar_request and self._display_mode(scope, origin, 'month') == 'text'):
                         img = None
             except HabitError as exc:
                 reply, img = f'⚠️ {exc}', None
                 calendar_request = False
             except Exception:
-                logger.exception('[daka 1.7] Command processing failed')
+                logger.exception('[daka 1.8] Command processing failed')
                 reply, img = '⚠️ 处理失败，请查看 AstrBot 日志。', None
                 calendar_request = False
 
             if calendar_request:
                 await self._send_calendar(event, reply, img)
+            elif reply and '今日打卡' in reply and self._display_mode(scope, origin, 'daily') == 'image':
+                daily_img = self._make_daily_image(scope, sender, nick, self._today())
+                if daily_img:
+                    await self._send_daily_image(event, reply, daily_img, scope, sender, nick, self._today())
+                elif adapter_type in OFFICIAL:
+                    try:
+                        report = await send_status(event, reply,
+                                                   self.store.daily(scope, sender, self._today()),
+                                                   self._ui_mode(scope, origin), logger.info)
+                        self._last_delivery[origin] = report
+                    except Exception as exc:
+                        reason = safe_error(exc)
+                        self._last_delivery[origin] = {'mode': 'astrbot-text-fallback', 'errors': [reason]}
+                        logger.warning('[daka 1.8] Interactive send failed: %s', reason)
+                        await self._send_plain(event, reply)
+                else:
+                    await self._send_plain(event, reply)
             elif reply and '今日打卡' in reply and adapter_type in OFFICIAL:
                 try:
                     report = await send_status(event, reply,
@@ -464,7 +603,7 @@ class GroupDaka(Star):
                 except Exception as exc:
                     reason = safe_error(exc)
                     self._last_delivery[origin] = {'mode': 'astrbot-text-fallback', 'errors': [reason]}
-                    logger.warning('[daka 1.7] Interactive send failed: %s', reason)
+                    logger.warning('[daka 1.8] Interactive send failed: %s', reason)
                     await self._send_plain(event, reply)
             elif reply:
                 await self._send_plain(event, reply)

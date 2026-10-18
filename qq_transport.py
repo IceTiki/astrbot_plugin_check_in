@@ -226,13 +226,13 @@ def command_links(items: list[dict], scene: str, root: str = '/\u6253\u5361') ->
 
 
 async def send_status(event, text: str, items: list[dict], mode: str, log,
-                      root: str = '/\u6253\u5361') -> dict:
+                      root: str = '/\u6253\u5361', transport: QQTransport | None = None) -> dict:
     """auto: Markdown+keyboard -> Markdown+links -> actual plain text.
 
     Unlike v1.4 this does not return False silently and does not disable every
     user's buttons after one failure. No assumption about visual rendering.
     """
-    transport = QQTransport(event)
+    transport = transport or QQTransport(event)
     ctx = transport.ctx
     hint_keyboard = ('\u70b9\u4e0b\u65b9\u6309\u94ae\u6253\u5361\uff0c\u968f\u540e\u5237\u65b0\u4eca\u65e5\u72b6\u6001\u3002' if ctx.scene == 'c2c' else
                      '\u70b9\u6309\u94ae\u586b\u5165\u6307\u4ee4\u540e\uff0c\u8bf7\u518d\u6309\u53d1\u9001\u3002')

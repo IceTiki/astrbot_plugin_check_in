@@ -1,8 +1,17 @@
-# AstrBot 习惯打卡 v1.7.0
+# AstrBot 习惯打卡 v1.8.0
 
-本版本从 v1.6.0 的「宽限后阶梯减半」切换为**最佳时间一到就开始连续指数半衰期衰减**。
-保留 QQ 官方机器人按钮/文字链、月历图片、QQ 群与私聊统一账户、准确打卡时间、任务权重、凌晨 04:00 换日和补签。
-插件名、容器名及数据目录不改变，不需要 LLM、不新增服务。
+本版本在 v1.7.0 的计分与数据结构上重构展示层：**每日默认图片卡片、月历默认图片、Win8/Metro 扁平风格、每项任务固定颜色**。保留旧版详细纯文字兼容模式、QQ 官方机器人按钮/文字链、QQ 群与私聊统一账户、任务权重、凌晨 04:00 换日和补签。
+
+不改变计分公式、不重置 SQLite、不需要 LLM、不新增服务。新版本只给 `ui_preferences` 增加两个可空展示偏好字段，旧配置和历史记录保持兼容。
+
+## v1.8.0 展示改版
+
+- `/打卡` 默认发每日图片：总完成度、总得分、完成项数、每项任务得分/状态/时间。
+- `/打卡 月历` 默认发月历图片：每天显示百分比、得分，以及按任务顺序排列的彩色小格。
+- 内置任务颜色固定；自定义任务按名称生成稳定颜色，重启后不会变。
+- 默认文案只保留状态，不在每个任务下面重复解释最佳时间和半衰期。
+- `/打卡 视图 文字`、`/打卡 月历视图 文字` 可切换纯文字；`/打卡 视图 图片`、`/打卡 月历视图 图片` 恢复图片模式。
+- 图片渲染或发送失败时回退到文字状态；QQ 官方机器人图片与按钮分两条消息发送，以保留现有按钮/文字链交互。
 
 ## 新时间公式（重要）
 
@@ -70,6 +79,10 @@
 /打卡 记录
 /打卡 月历
 /打卡 月历 睡觉
+/打卡 视图 图片
+/打卡 视图 文字
+/打卡 月历视图 图片
+/打卡 月历视图 文字
 /打卡 补签 睡觉 昨天 23:50
 /打卡 撤销 睡觉
 /打卡 交互 按钮
@@ -99,15 +112,15 @@
 
 将下面文件传到 Debian 的 `/opt/services/astrbot/`：
 
-- `astrbot_plugin_daka_v1.7.0.zip`
-- `update_astrbot_daka_v1.7.0.py`
+- `astrbot_plugin_daka_v1.8.0.zip`
+- `update_astrbot_daka_v1.8.0.py`
 
 执行：
 
 ```bash
 cd /opt/services/astrbot
-python3 update_astrbot_daka_v1.7.0.py astrbot_plugin_daka_v1.7.0.zip --check-only
-python3 update_astrbot_daka_v1.7.0.py astrbot_plugin_daka_v1.7.0.zip
+python3 update_astrbot_daka_v1.8.0.py astrbot_plugin_daka_v1.8.0.zip --check-only
+python3 update_astrbot_daka_v1.8.0.py astrbot_plugin_daka_v1.8.0.zip
 docker logs --since 3m --tail=150 astrbot
 ```
 
@@ -129,4 +142,4 @@ docker logs --since 3m --tail=150 astrbot
 
 期望看到设置是 `最佳23:30 · 半衰期30分`；在23:45打睡觉卡可得到约 `0.71/1`，00:00打卡得 `0.5/1`。这些只是示例：真实打卡按实际时间计算。
 
-本地离线测试覆盖 SQLite 和模拟 QQ API 的行为。**没有直接连接你的 AstrBot／QQ 机器人进行端到端验证**；图片、按钮保持上一版本的实现方式，不据此宣称 QQ 实际发送已再次测试成功。
+本地离线测试覆盖 SQLite、图片渲染和模拟 QQ API 的消息顺序。**没有直接连接你的 AstrBot／QQ 机器人进行端到端验证**；QQ 客户端是否显示图片、按钮仍需部署后确认。
