@@ -8,6 +8,9 @@ from __future__ import annotations
 import asyncio
 import calendar
 import hashlib
+import hmac
+import secrets
+import time
 import re
 import sqlite3
 from datetime import date, datetime, timedelta
@@ -26,6 +29,8 @@ from .daily_image import render_daily_panel
 from .store import HabitError, validate_day, validate_month
 from .accounts import identity_aliases
 from .scored_store import ScoredStore
+from .task_maintenance import (inspect_task, rename_task, purge_task,
+                               backup_before_edit)
 from .scoring import (business_day, RENAMES, at_clock, validate_clock, validate_delay,
                       validate_weight, parse_backfill_time, fmt_number, fmt_percent, summarize)
 from .panel import daily_panel
@@ -36,7 +41,7 @@ from .qq_transport import (QQTransport, app_id_of, platform_name, send_status, s
 COMMAND_TOKEN = re.compile(r"(?:^|\s)[/／]?打卡(?=\s|$)")
 PERSONAL_PREF_ORIGIN = "__person__"
 RESERVED_COMMANDS = {"任务", "记录", "视图", "好友", "账户", "群设置",
-                     "月历", "帮助"}
+                     "月历", "帮助", "调试"}
 RETIRED_COMMANDS = {
     "今日", "今天", "进度", "清单", "习惯", "设置", "添加", "删除", "恢复",
     "目标", "权重", "时间", "时段", "最佳", "延迟", "半衰期", "规则",
@@ -89,21 +94,22 @@ class GroupDaka(Star):
         if self.help_display_mode not in ("image", "text"):
             self.help_display_mode = "image"
         self._last_delivery = {}
+        self._debug_pending = {}
         self.data_dir = Path(get_astrbot_data_path()) / "plugin_data" / "astrbot_plugin_daka"
         self.data_dir.mkdir(parents=True, exist_ok=True)
         db_path = self.data_dir / "checkin.sqlite3"
         if db_path.is_file() and db_path.stat().st_size:
             with sqlite3.connect(db_path) as old:
-                if old.execute("PRAGMA user_version").fetchone()[0] < 10900:
+                if old.execute("PRAGMA user_version").fetchone()[0] < 10901:
                     backup_dir = Path(get_astrbot_data_path()) / "backups" / "astrbot_plugin_daka"
                     backup_dir.mkdir(parents=True, exist_ok=True)
-                    backup = backup_dir / f"pre-1.9-{datetime.now():%Y%m%d-%H%M%S-%f}.sqlite3"
+                    backup = backup_dir / f"pre-1.9.1-{datetime.now():%Y%m%d-%H%M%S-%f}.sqlite3"
                     with sqlite3.connect(backup) as copy:
                         old.backup(copy)
-                    logger.info("[daka 1.9] Pre-migration database snapshot: %s", backup)
+                    logger.info("[daka 1.9.1] Pre-upgrade database snapshot: %s", backup)
         self.store = ScoredStore(db_path, self.tz, clock=lambda: self._now())
         with self.store._db() as conn:
-            conn.execute("PRAGMA user_version=10900")
+            conn.execute("PRAGMA user_version=10901")
             conn.execute("CREATE TABLE IF NOT EXISTS ui_preferences ("
                          "scope TEXT NOT NULL, origin TEXT NOT NULL, mode TEXT NOT NULL, "
                          "PRIMARY KEY(scope, origin))")
@@ -538,14 +544,14 @@ class GroupDaka(Star):
         if self._display_mode(scope, origin, "help") == "image":
             try:
                 image_path = cache_file(self.data_dir / "cache", "help", "all",
-                                        "v1.9", "help-metro-v190")
+                                        "v1.9.1", "help-metro-v191")
                 image = render_help_image(image_path)
                 if image:
                     if platform_name(event) in OFFICIAL:
-                        await QQTransport(event).image(image, "🌱 打卡命令大全 v1.9 · 发送 /打卡 帮助 随时查看")
+                        await QQTransport(event).image(image, "🌱 打卡命令大全 v1.9.1 · 发送 /打卡 帮助 随时查看")
                     else:
                         await event.send(MessageChain().message(
-                            "🌱 打卡命令大全 v1.9").file_image(image))
+                            "🌱 打卡命令大全 v1.9.1").file_image(image))
                     self._last_delivery[origin] = {"mode": "help-image", "ack": True}
                     return
                 logger.warning("[daka 1.9] Help image unavailable: Pillow or CJK font missing")
@@ -719,6 +725,102 @@ class GroupDaka(Star):
         finally:
             event.stop_event()
 
+    def _debug_command(self, args: list[str], scope: str, is_admin: bool) -> tuple[str, None]:
+        """High-risk task maintenance. Strict administrator + two-step confirmation."""
+        if not is_admin:
+            raise HabitError("调试更名和彻底删除仅限 AstrBot 管理员操作。")
+        usage = ("🔧 调试命令（只影响你当前的个人账户）\n"
+                 "/打卡 调试 更名 旧名称 新名称\n"
+                 "/打卡 调试 彻底删除 任务名称\n"
+                 "执行前先预览影响，确认码五分钟内有效。\n"
+                 "操作会自动备份 SQLite；备份和旧版本快照不会随彻底删除自动清除。")
+        if not args:
+            return usage, None
+        operation = args[0]
+        if operation == "更名":
+            if len(args) not in (3, 5):
+                raise HabitError("用法：/打卡 调试 更名 旧名称 新名称 [确认 确认码]")
+            old, new = args[1:3]
+            if new in RESERVED_COMMANDS or new in RETIRED_COMMANDS or new.isdecimal():
+                raise HabitError("新名称与系统命令冲突，请选择其他任务名称。")
+            confirmed = len(args) == 5 and args[3] == "确认"
+            if len(args) == 5 and not confirmed:
+                raise HabitError("用法：/打卡 调试 更名 旧名称 新名称 确认 确认码")
+            token = args[4] if confirmed else None
+            target = new
+        elif operation == "彻底删除":
+            if len(args) not in (2, 4):
+                raise HabitError("用法：/打卡 调试 彻底删除 任务名称 [确认 确认码]")
+            old = args[1]
+            confirmed = len(args) == 4 and args[2] == "确认"
+            if len(args) == 4 and not confirmed:
+                raise HabitError("用法：/打卡 调试 彻底删除 任务名称 确认 确认码")
+            token = args[3] if confirmed else None
+            target = None
+        else:
+            raise HabitError(usage)
+
+        if not confirmed:
+            preview = inspect_task(self.store, scope, old, target)
+            confirm_code = secrets.token_hex(4).upper()
+            self._debug_pending[scope] = {
+                "operation": operation, "old": preview["source"],
+                "new": target, "fingerprint": preview["fingerprint"],
+                "code": confirm_code, "expires": time.monotonic() + 300,
+            }
+            c = preview["counts"]
+            intro = (f"⚠️ 调试预览：{old} → {target}\n"
+                     + ("目标名称已存在，将合并两项。"
+                        if preview["merge"] else "目标名称不存在，将直接更名。")) if target else (
+                        f"⚠️ 永久删除预览：{old}\n"
+                        "将从当前个人账户移除该任务及所有历史记录。")
+            lines = [intro,
+                     f"当前涉及：规则 {c['habit_rules']} 条，日记录 {c['records']} 条，"
+                     f"事件 {c['checkin_events']} 条。"]
+            if preview["merge"]:
+                lines.append(f"两项同日重合：{preview['overlapping_days']} 天。")
+                lines.append("以新名称的配置为准；同日次数相加但最多计入新目标当日次数，"
+                             "全部事件时间保留。")
+                if not preview["destination_enabled"]:
+                    lines.append("注意：目标任务目前是停用状态，合并不会自动启用它。")
+            if target is None:
+                lines.append("⚠️ 会删除已停用任务和过去的打卡事件；操作无法在聊天里撤销。")
+            lines.append("执行前会自动创建 SQLite 安全备份（备份中仍保留原数据）。")
+            cmd = (f"/打卡 调试 更名 {old} {target} 确认 {confirm_code}" if target is not None
+                   else f"/打卡 调试 彻底删除 {old} 确认 {confirm_code}")
+            lines.append("请在 5 分钟内再次发送以下完整指令确认：\n" + cmd)
+            return "\n".join(lines), None
+
+        pending = self._debug_pending.get(scope)
+        if (not pending or pending["expires"] < time.monotonic() or
+            pending["operation"] != operation or pending["old"] != old or
+            pending["new"] != target or
+            not hmac.compare_digest(pending["code"], token.upper())):
+            raise HabitError("确认码无效、已过期或指令不匹配。请重新发送不带确认码的调试命令。")
+        # Consume the token before any destructive action; no accidental retries.
+        self._debug_pending.pop(scope, None)
+        current = inspect_task(self.store, scope, old, target)
+        if current["fingerprint"] != pending["fingerprint"]:
+            raise HabitError("任务内容在预览后发生变化，已中止，请重新预览并确认。")
+        backup = backup_before_edit(
+            self.store.db_path,
+            Path(get_astrbot_data_path()) / "backups" / "astrbot_plugin_daka" / "maintenance",
+            "rename" if target is not None else "purge",
+        )
+        if target is not None:
+            result = rename_task(self.store, scope, old, target, pending["fingerprint"])
+            detail = ("两项已合并" if result["merge"] else "已完成更名")
+            return (f"✅ {detail}：「{old}」→「{target}」。\n"
+                    f"原任务的打卡事件 {result['counts']['checkin_events']} 条已保留。\n"
+                    f"操作前备份：{backup}"), None
+        result = purge_task(self.store, scope, old, pending["fingerprint"])
+        deleted = result["deleted"]
+        return (f"✅ 已彻底删除当前个人账户中的「{old}」。\n"
+                f"删除规则 {deleted['habit_rules']} 条，日记录 {deleted['records']} 条，"
+                f"打卡事件 {deleted['checkin_events']} 条。\n"
+                f"操作前备份：{backup}\n"
+                "注意：备份文件和历史数据库快照仍会保留原数据。"), None
+
     def _task_command(self, args, scope, sender, nick, is_admin, today):
         if not args or (len(args) == 1 and args[0] not in ("目标", "删除", "时间", "权重", "规则")):
             name = self._canonical_habit(scope, args[0]) if args else None
@@ -876,6 +978,8 @@ class GroupDaka(Star):
         if not parts:
             return self._daily_status(scope, sender, nick, today), None
         action, *args = parts
+        if action == "调试":
+            return self._debug_command(args, scope, is_admin)
         if action == "任务":
             return self._task_command(args, scope, sender, nick, is_admin, today)
         if action == "记录":
