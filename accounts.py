@@ -288,6 +288,27 @@ class AccountCheckinStore(CheckinStore):
                 ON CONFLICT(scope,user_id) DO UPDATE SET
                     visible=MIN(members.visible,excluded.visible)
             ''', (member['scope'], target, member['display_name'], member['visible'], member['joined_at']))
+        # Preserve personal view preferences when two verified identities merge.
+        # The destination's existing preferences take priority. Old/source rows
+        # stay intact for rollback and for pre-v1.9 migration.
+        has_prefs = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='ui_preferences'"
+        ).fetchone()
+        if has_prefs:
+            columns = {r[1] for r in conn.execute("PRAGMA table_info(ui_preferences)")}
+            if "help_view_mode" in columns:
+                personal = conn.execute(
+                    "SELECT mode,daily_view_mode,month_view_mode,help_view_mode "
+                    "FROM ui_preferences WHERE scope=? AND origin=?",
+                    (src, "__person__"),
+                ).fetchone()
+                if personal:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO ui_preferences("
+                        "scope,origin,mode,daily_view_mode,month_view_mode,help_view_mode) "
+                        "VALUES (?,?,?,?,?,?)",
+                        (dst, "__person__", *personal),
+                    )
         conn.execute('DELETE FROM members WHERE user_id=?', (source,))
         conn.execute('UPDATE person_aliases SET account_id=? WHERE account_id=?', (target, source))
         conn.execute('UPDATE imported_legacy SET account_id=? WHERE account_id=?', (target, source))

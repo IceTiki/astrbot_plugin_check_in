@@ -171,7 +171,7 @@ class QQTransport:
 
 
 def command_for(item: dict, root: str = '/\u6253\u5361') -> str:
-    return f"{root} {item['name']}" + (' +1' if int(item['target']) > 1 else '')
+    return f"{root} {item['name']}"
 
 
 def keyboard(items: list[dict], ctx: QQContext, root: str = '/\u6253\u5361') -> dict:

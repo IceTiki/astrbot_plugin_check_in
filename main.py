@@ -20,6 +20,8 @@ from astrbot.api.star import Context, Star
 from astrbot.core.utils.astrbot_path import get_astrbot_data_path
 
 from .calendar_image import cache_file
+from .help_content import HELP_TEXT
+from .help_image import render_help_image
 from .daily_image import render_daily_panel
 from .store import HabitError, validate_day, validate_month
 from .accounts import identity_aliases
@@ -32,30 +34,17 @@ from .qq_transport import (QQTransport, app_id_of, platform_name, send_status, s
 
 
 COMMAND_TOKEN = re.compile(r"(?:^|\s)[/／]?打卡(?=\s|$)")
-HELP = """🌱 习惯打卡 v1.8
-/打卡                  今日图片状态、得分和交互按钮
-/打卡 睡觉             保存打卡时间，刷新今日状态
-/打卡 工作一小时 +1   记录一次工作（不是计时器）
-/打卡 7                按序号完成一次
-/打卡 设置             查看目标、最佳时间、半衰期和权重
-/打卡 时间 睡觉 23:30 30  设置最佳时间+半衰期（分钟）
-/打卡 最佳 起床 08:00    只修改最佳时间
-/打卡 半衰期 起床 30     只修改半衰期（旧命令「延迟」仍有效）
-/打卡 时间 运动 关闭      取消限时计分
-/打卡 权重 运动 0        设为可选，不影响总完成度
-/打卡 目标 工作一小时 3  修改每日目标次数
-/打卡 添加 阅读 1 0      添加一项权重0的任务
-/打卡 撤销 睡觉           撤销当天该任务所有记录
-/打卡 补签 睡觉 昨天 23:50  补签需要实际完成时间
-/打卡 记录 [任务] [日期]  查看打卡时间
-/打卡 月历 [任务] [YYYY-MM]  查看加权日历
-/打卡 规则               查看分数公式与计分约束
-/打卡 交互 按钮|文字链|自动|纯文字
-/打卡 视图 图片|文字
-/打卡 月历视图 图片|文字
-/打卡 身份 | /打卡 诊断
-其余好友、排行、隐私、绑定及提醒功能保留。
-凌晨04:00换日，已结束日期保留历史旧规则。"""
+PERSONAL_PREF_ORIGIN = "__person__"
+RESERVED_COMMANDS = {"任务", "记录", "视图", "好友", "账户", "群设置",
+                     "月历", "帮助"}
+RETIRED_COMMANDS = {
+    "今日", "今天", "进度", "清单", "习惯", "设置", "添加", "删除", "恢复",
+    "目标", "权重", "时间", "时段", "最佳", "延迟", "半衰期", "规则",
+    "撤销", "取消", "补签", "隐私", "排行", "排行榜", "文字月历",
+    "交互", "显示", "月历视图", "月历样式", "月历展示",
+    "身份", "绑定", "解绑", "绑定状态", "诊断", "按钮诊断", "按钮状态",
+    "提醒", "关闭提醒", "历史时间", "help", "?",
+}
 
 RULE_HELP = """📐 连续半衰期计分（v1.7）
 打卡日：04:00 至次日 03:59:59（配置时区）。
@@ -69,7 +58,7 @@ RULE_HELP = """📐 连续半衰期计分（v1.7）
 任务达标后额外打卡不增加次数、不覆盖完成时间。
 修改设置从当前打卡日起生效，以前完成的日期继续沿用旧规则：
 v1.6 已结束日期使用原阶梯式扣分；历史旧数据不猜测不存在的时间。
-命令：/打卡 半衰期 睡觉 30；/打卡 时间 睡觉 23:30 30。
+命令：/打卡 任务 时间 睡觉 23:30 30；/打卡 任务 权重 阅读 0。
 此功能只记录自报完成时间，不验证真实睡眠或工作。"""
 
 
@@ -96,22 +85,25 @@ class GroupDaka(Star):
         self.month_display_mode = str(self.config.get("month_display_mode", "image")).lower()
         if self.month_display_mode not in ("image", "text"):
             self.month_display_mode = "image"
+        self.help_display_mode = str(self.config.get("help_display_mode", "image")).lower()
+        if self.help_display_mode not in ("image", "text"):
+            self.help_display_mode = "image"
         self._last_delivery = {}
         self.data_dir = Path(get_astrbot_data_path()) / "plugin_data" / "astrbot_plugin_daka"
         self.data_dir.mkdir(parents=True, exist_ok=True)
         db_path = self.data_dir / "checkin.sqlite3"
         if db_path.is_file() and db_path.stat().st_size:
             with sqlite3.connect(db_path) as old:
-                if old.execute("PRAGMA user_version").fetchone()[0] < 10700:
+                if old.execute("PRAGMA user_version").fetchone()[0] < 10900:
                     backup_dir = Path(get_astrbot_data_path()) / "backups" / "astrbot_plugin_daka"
                     backup_dir.mkdir(parents=True, exist_ok=True)
-                    backup = backup_dir / f"pre-1.7-{datetime.now():%Y%m%d-%H%M%S-%f}.sqlite3"
+                    backup = backup_dir / f"pre-1.9-{datetime.now():%Y%m%d-%H%M%S-%f}.sqlite3"
                     with sqlite3.connect(backup) as copy:
                         old.backup(copy)
-                    logger.info("[daka 1.7] Pre-migration database snapshot: %s", backup)
+                    logger.info("[daka 1.9] Pre-migration database snapshot: %s", backup)
         self.store = ScoredStore(db_path, self.tz, clock=lambda: self._now())
         with self.store._db() as conn:
-            conn.execute("PRAGMA user_version=10700")
+            conn.execute("PRAGMA user_version=10900")
             conn.execute("CREATE TABLE IF NOT EXISTS ui_preferences ("
                          "scope TEXT NOT NULL, origin TEXT NOT NULL, mode TEXT NOT NULL, "
                          "PRIMARY KEY(scope, origin))")
@@ -120,6 +112,8 @@ class GroupDaka(Star):
                 conn.execute("ALTER TABLE ui_preferences ADD COLUMN daily_view_mode TEXT")
             if "month_view_mode" not in columns:
                 conn.execute("ALTER TABLE ui_preferences ADD COLUMN month_view_mode TEXT")
+            if "help_view_mode" not in columns:
+                conn.execute("ALTER TABLE ui_preferences ADD COLUMN help_view_mode TEXT")
         self._reminder_task: asyncio.Task | None = None
 
     def _today(self) -> date:
@@ -162,7 +156,7 @@ class GroupDaka(Star):
                         chain = MessageChain().message(
                             f"🌱 {now:%Y-%m-%d} 习惯打卡提醒\n"
                             "今天的个人任务完成了吗？打卡日在凌晨 04:00 换日。\n"
-                            "发送 /打卡 今日 查看进度，/打卡 清单 查看习惯。"
+                            "发送 /打卡 查看进度，/打卡 任务 查看习惯。"
                         )
                         await self.context.send_message(scope, chain)
                         self.store.mark_reminder_sent(scope, now.date())
@@ -209,34 +203,78 @@ class GroupDaka(Star):
     def _daily_status(self, scope, sender, nick, today):
         return daily_panel(self.store.daily(scope, sender, today), nick, today, self._now(), self.tz)
 
-    def _display_mode(self, scope: str, origin: str, kind: str) -> str:
-        columns = {"daily": "daily_view_mode", "month": "month_view_mode"}
-        if kind not in columns:
-            raise ValueError("unknown display mode")
-        column = columns[kind]
+    def _ensure_person_preferences(self, scope: str, origin: str):
+        """Move old origin-scoped values to one per-account row, on first access.
+
+        Old rows remain untouched for rollback. If group/DM preferences differ,
+        the conversation that first opens v1.9 wins, deterministically.
+        """
         with self.store._db() as conn:
-            row = conn.execute(
-                f"SELECT {column} FROM ui_preferences WHERE scope=? AND origin=?",
+            if conn.execute(
+                "SELECT 1 FROM ui_preferences WHERE scope=? AND origin=?",
+                (scope, PERSONAL_PREF_ORIGIN),
+            ).fetchone():
+                return
+            old = conn.execute(
+                "SELECT mode,daily_view_mode,month_view_mode,help_view_mode "
+                "FROM ui_preferences WHERE scope=? AND origin=?",
                 (scope, origin),
             ).fetchone()
-        value = row[column] if row else None
-        if value in ("image", "text"):
-            return value
-        return self.daily_display_mode if kind == "daily" else self.month_display_mode
+            if old is None:
+                old = conn.execute(
+                    "SELECT mode,daily_view_mode,month_view_mode,help_view_mode "
+                    "FROM ui_preferences WHERE scope=? AND origin<>? "
+                    "ORDER BY rowid LIMIT 1",
+                    (scope, PERSONAL_PREF_ORIGIN),
+                ).fetchone()
+            values = tuple(old) if old else (self.interaction_mode, None, None, None)
+            conn.execute(
+                "INSERT OR IGNORE INTO ui_preferences("
+                "scope,origin,mode,daily_view_mode,month_view_mode,help_view_mode) "
+                "VALUES (?,?,?,?,?,?)",
+                (scope, PERSONAL_PREF_ORIGIN, *values),
+            )
+
+    def _preferences(self, scope: str, origin: str):
+        self._ensure_person_preferences(scope, origin)
+        with self.store._db() as conn:
+            return conn.execute(
+                "SELECT * FROM ui_preferences WHERE scope=? AND origin=?",
+                (scope, PERSONAL_PREF_ORIGIN),
+            ).fetchone()
+
+    def _display_mode(self, scope: str, origin: str, kind: str) -> str:
+        columns = {"daily": "daily_view_mode", "month": "month_view_mode",
+                   "help": "help_view_mode"}
+        defaults = {"daily": self.daily_display_mode, "month": self.month_display_mode,
+                    "help": self.help_display_mode}
+        if kind not in columns:
+            raise ValueError("unknown display mode")
+        pref = self._preferences(scope, origin)
+        value = pref[columns[kind]]
+        return value if value in ("image", "text") else defaults[kind]
 
     def _set_display_mode(self, scope: str, origin: str, kind: str, mode: str):
-        columns = {"daily": "daily_view_mode", "month": "month_view_mode"}
+        columns = {"daily": "daily_view_mode", "month": "month_view_mode",
+                   "help": "help_view_mode"}
         if kind not in columns or mode not in ("image", "text"):
             raise ValueError("invalid display preference")
-        column = columns[kind]
+        self._ensure_person_preferences(scope, origin)
         with self.store._db() as conn:
             conn.execute(
-                "INSERT OR IGNORE INTO ui_preferences(scope,origin,mode) VALUES (?,?,?)",
-                (scope, origin, self.interaction_mode),
+                f"UPDATE ui_preferences SET {columns[kind]}=? "
+                "WHERE scope=? AND origin=?",
+                (mode, scope, PERSONAL_PREF_ORIGIN),
             )
+
+    def _reset_preferences(self, scope: str, origin: str):
+        self._ensure_person_preferences(scope, origin)
+        with self.store._db() as conn:
             conn.execute(
-                f"UPDATE ui_preferences SET {column}=? WHERE scope=? AND origin=?",
-                (mode, scope, origin),
+                "UPDATE ui_preferences SET mode=?,daily_view_mode=NULL,"
+                "month_view_mode=NULL,help_view_mode=NULL "
+                "WHERE scope=? AND origin=?",
+                (self.interaction_mode, scope, PERSONAL_PREF_ORIGIN),
             )
 
     def _make_daily_image(self, scope, sender, nick, today):
@@ -282,7 +320,7 @@ class GroupDaka(Star):
             short = (f"{fmt_percent(stats['ratio'])} · {fmt_number(stats['earned'])}/"
                      f"{fmt_number(stats['weight'])} 分 · {stats['required_finished']}/"
                      f"{stats['required_total']} 项\n"
-                     "点下方按钮打卡；文字版 /打卡 视图 文字")
+                     "点下方按钮打卡；文字版 /打卡 视图 今日 文字")
             try:
                 report = await send_status(event, short, items, self._ui_mode(scope, origin),
                                            logger.info, transport=transport)
@@ -404,15 +442,15 @@ class GroupDaka(Star):
         action, args = parts[0], parts[1:]
         if action == "解绑":
             if is_group:
-                raise HabitError("请在私聊中发送 /打卡 解绑。")
+                raise HabitError("请在私聊中发送 /打卡 账户 解绑。")
             if args:
-                raise HabitError("用法：/打卡 解绑")
+                raise HabitError("用法：/打卡 账户 解绑")
             changed = self.store.unbind_private_link(origin, sender)
             return ("✅ 已取消私聊的默认群关联。个人习惯和历史打卡仍然统一，不会分裂数据。" if changed
                     else "当前私聊没有选定默认群；个人数据仍会按用户身份保存。")
         if is_group:
             if len(args) != 1:
-                raise HabitError("请先私聊机器人发送 /打卡 绑定 获取临时码，再在群里发送 /打卡 绑定 绑定码。")
+                raise HabitError("请先私聊发送 /打卡 账户 绑定，再在群里发送 /打卡 账户 绑定 绑定码。")
             # Redeem first to verify that this is an authorized user-controlled
             # link. Keep token spent even if a later step errors out.
             private = self.store.redeem_private_link_token(args[0], origin, sender)
@@ -427,26 +465,30 @@ class GroupDaka(Star):
                     "\n两边旧数据都已合并；相同日期同项的历史次数取较大值，避免重复计算。"
                     "\n以后在私聊或群里发送 /打卡，都会看到更新后的个人状态。")
         if args:
-            raise HabitError("请在私聊直接发送 /打卡 绑定，不需要额外参数。")
+            raise HabitError("请在私聊直接发送 /打卡 账户 绑定，不需要额外参数。")
         token = self.store.issue_private_link_token(origin, sender)
         return ("🔐 你的 QQ 身份绑定码（10 分钟有效、一次性）：\n"
-                f"{token}\n\n请【本人】在目标 QQ 群发送：\n/打卡 绑定 {token}\n"
+                f"{token}\n\n请【本人】在目标 QQ 群发送：\n/打卡 账户 绑定 {token}\n"
                 "绑定后会合并已有的群和私聊历史，而不是仅切换查看某个群。"
                 "\n不要将绑定码私发给其他人。")
 
     def _ui_mode(self, scope: str, origin: str) -> str:
-        with self.store._db() as conn:
-            row = conn.execute('SELECT mode FROM ui_preferences WHERE scope=? AND origin=?',
-                               (scope, origin)).fetchone()
-        mode = row['mode'] if row else self.interaction_mode
+        pref = self._preferences(scope, origin)
+        mode = pref['mode']
+        if mode not in ('auto', 'keyboard', 'links', 'text'):
+            mode = self.interaction_mode
         if not self.qq_buttons_enabled and mode in ('auto', 'keyboard'):
             mode = 'links'
         return mode
 
     def _set_ui_mode(self, scope: str, origin: str, mode: str):
+        if mode not in ('auto', 'keyboard', 'links', 'text'):
+            raise ValueError('invalid interaction mode')
+        self._ensure_person_preferences(scope, origin)
         with self.store._db() as conn:
-            conn.execute('INSERT OR REPLACE INTO ui_preferences(scope,origin,mode) VALUES (?,?,?)',
-                         (scope, origin, mode))
+            # UPDATE instead of REPLACE: do not erase the other three preferences.
+            conn.execute('UPDATE ui_preferences SET mode=? WHERE scope=? AND origin=?',
+                         (mode, scope, PERSONAL_PREF_ORIGIN))
 
     async def _send_plain(self, event, reply: str):
         # Explicit send before stop_event. No yield chain that can be closed
@@ -474,9 +516,110 @@ class GroupDaka(Star):
                 reply = '⚠️ 月历图片发送失败，以下为文字月历。\n' + reply
         await self._send_plain(event, reply)
 
+    async def _send_text_chunks(self, event, text: str, limit: int = 950):
+        """QQ-safe full help fallback; never silently truncate commands."""
+        buffer = ""
+        for line in text.splitlines(keepends=True):
+            if buffer and len(buffer) + len(line) > limit:
+                await self._send_plain(event, buffer.rstrip())
+                buffer = ""
+            if len(line) > limit:
+                if buffer:
+                    await self._send_plain(event, buffer.rstrip())
+                    buffer = ""
+                for offset in range(0, len(line), limit):
+                    await self._send_plain(event, line[offset:offset+limit])
+            else:
+                buffer += line
+        if buffer.strip():
+            await self._send_plain(event, buffer.rstrip())
+
+    async def _send_help(self, event, scope: str, origin: str):
+        if self._display_mode(scope, origin, "help") == "image":
+            try:
+                image_path = cache_file(self.data_dir / "cache", "help", "all",
+                                        "v1.9", "help-metro-v190")
+                image = render_help_image(image_path)
+                if image:
+                    if platform_name(event) in OFFICIAL:
+                        await QQTransport(event).image(image, "🌱 打卡命令大全 v1.9 · 发送 /打卡 帮助 随时查看")
+                    else:
+                        await event.send(MessageChain().message(
+                            "🌱 打卡命令大全 v1.9").file_image(image))
+                    self._last_delivery[origin] = {"mode": "help-image", "ack": True}
+                    return
+                logger.warning("[daka 1.9] Help image unavailable: Pillow or CJK font missing")
+            except Exception as exc:
+                reason = safe_error(exc)
+                logger.warning("[daka 1.9] Help image send failed: %s", reason)
+                self._last_delivery[origin] = {"mode": "help-text-fallback", "errors": [reason]}
+        await self._send_text_chunks(event, HELP_TEXT)
+
+    def _view_command(self, event, args: list[str], scope: str, origin: str,
+                      account_code: str, user_code: str) -> str:
+        if not args:
+            modes = {"image": "图片", "text": "文字"}
+            ops = {"auto": "自动", "keyboard": "按钮", "links": "文字链接", "text": "关闭"}
+            pref = self._preferences(scope, origin)
+            mode = pref['mode'] if pref['mode'] in ops else self.interaction_mode
+            return ("🖼 我的默认视图（群聊／私聊共用）\n"
+                    f"今日：{modes[self._display_mode(scope, origin, 'daily')]}\n"
+                    f"月历：{modes[self._display_mode(scope, origin, 'month')]}\n"
+                    f"帮助：{modes[self._display_mode(scope, origin, 'help')]}\n"
+                    f"快捷操作：{ops.get(mode, '自动')}\n"
+                    "设置：/打卡 视图 今日 图片\n"
+                    "或：/打卡 视图 帮助 文字\n"
+                    "其他选项请见 /打卡 帮助。")
+        if args == ["重置"]:
+            self._reset_preferences(scope, origin)
+            return "✅ 个人每日、月历、帮助与快捷操作视图均已恢复插件默认值。"
+        if args == ["诊断"]:
+            report = self._last_delivery.get(origin, {})
+            try:
+                transport = QQTransport(event)
+                api_state = transport.ctx.scene + ' / bot.api available'
+            except Exception as exc:
+                api_state = safe_error(exc)
+            return (f"🔍 打卡诊断 v1.9\n账户：{account_code}\n发送者指纹：{user_code}\n"
+                    f"当前操作模式：{self._ui_mode(scope, origin)}\n接口：{api_state}\n"
+                    f"最近发送：{report.get('mode', 'not tried')}\n"
+                    f"接口确认：{report.get('ack', False)}\n"
+                    f"错误：{'; '.join(report.get('errors', [])) or 'none'}\n"
+                    "接口接受不代表 QQ 客户端显示了按钮。\n"
+                    "群内指令按钮插入后可能需要手动发送。\n"
+                    "可切换：/打卡 视图 操作 文字链接")
+        if len(args) != 2:
+            raise HabitError("用法：/打卡 视图 今日|月历|帮助 图片|文字；或 /打卡 视图 操作 自动|按钮|文字链接|关闭")
+        category, setting = args
+        modes = {"图片": "image", "文字": "text"}
+        kinds = {"今日": "daily", "月历": "month", "帮助": "help"}
+        if category in kinds and setting in modes:
+            self._set_display_mode(scope, origin, kinds[category], modes[setting])
+            return f"✅ 个人默认{category}视图已设为「{setting}」，群聊和私聊同步生效。"
+        operations = {"自动": "auto", "按钮": "keyboard",
+                      "文字链接": "links", "关闭": "text"}
+        if category == "操作" and setting in operations:
+            self._set_ui_mode(scope, origin, operations[setting])
+            return f"✅ 个人快捷操作方式已设为「{setting}」，不会覆盖其他视图设置。"
+        raise HabitError("用法：/打卡 视图 今日|月历|帮助 图片|文字；或 /打卡 视图 操作 自动|按钮|文字链接|关闭")
+
+    def _account_command(self, args: list[str], origin: str, raw_sender: str,
+                         is_group: bool, union_openid: str | None, nick: str,
+                         adapter_type: str, app_id: str | None,
+                         account_code: str, user_code: str) -> str:
+        if not args:
+            return (f"👤 个人账户：{account_code}\n"
+                    f"发送者指纹：{user_code}\n接入：{adapter_type}\n"
+                    "同一机器人已确认的相同 OpenID 共用个人数据。\n"
+                    "身份不同请使用 /打卡 账户 绑定 合并群聊和私聊记录。")
+        if args[0] not in ("绑定", "解绑"):
+            raise HabitError("用法：/打卡 账户 [绑定 [绑定码]|解绑]")
+        return self._binding_command(" ".join(args), origin, raw_sender, is_group,
+                                     union_openid, nick, adapter_type, app_id)
+
     @filter.command("打卡", priority=10)
     async def daka_command(self, event: AstrMessageEvent):
-        """One coroutine: resolve account, persist action, send replies, then stop."""
+        """Resolve a person, handle v1.9 commands, then emit the chosen view."""
         self._start_scheduler()
         origin = str(event.unified_msg_origin)
         raw_sender = str(event.get_sender_id())
@@ -486,15 +629,16 @@ class GroupDaka(Star):
         adapter_type = platform_name(event)
         app_id = app_id_of(event) if adapter_type in OFFICIAL else None
         union_openid = self._union_id_from_event(event)
-        sender, scope = self.store.SELF, ''
+        sender, scope = self.store.SELF, ""
         reply, img = None, None
-        calendar_request = False
-        logger.info('[daka 1.8] scene=%s command=%s', 'group' if is_group else 'c2c',
+        calendar_request = help_request = False
+        logger.info('[daka 1.9] scene=%s command=%s',
+                    'group' if is_group else 'c2c',
                     command.split(' ', 1)[0] if command else 'today')
         try:
             try:
-                account_id = self._resolve_person(origin, raw_sender, is_group, union_openid,
-                                                   adapter_type, app_id)
+                account_id = self._resolve_person(origin, raw_sender, is_group,
+                                                  union_openid, adapter_type, app_id)
                 social_scope = origin if is_group else None
                 if is_group:
                     self.store.remember_group_identity(origin, adapter_type, app_id)
@@ -503,81 +647,46 @@ class GroupDaka(Star):
                     linked = self.store.get_private_link(origin, raw_sender)
                     if linked is not None:
                         social_scope = linked['group_scope']
-                        group_account = self._resolve_person(linked['group_scope'], linked['group_user_id'],
-                                                             True, adapter_type=adapter_type, app_id=app_id)
+                        group_account = self._resolve_person(linked['group_scope'],
+                                                             linked['group_user_id'], True,
+                                                             adapter_type=adapter_type, app_id=app_id)
                         account_id = self.store.merge_persons(group_account, account_id)
                 scope = self.store.person_scope(account_id)
                 parts = command.split()
                 action = parts[0] if parts else ''
                 code = hashlib.sha256(account_id.encode()).hexdigest()[:10]
                 uid_code = hashlib.sha256(raw_sender.encode()).hexdigest()[:10]
-                if action in ('视图', '显示'):
-                    modes = {'图片': 'image', '文字': 'text'}
-                    if len(parts) != 2 or parts[1] not in modes:
-                        raise HabitError('用法：/打卡 视图 图片|文字')
-                    self._set_display_mode(scope, origin, 'daily', modes[parts[1]])
-                    reply = self._daily_status(scope, sender, nick, self._today())
-                elif action in ('月历视图', '月历样式', '月历展示'):
-                    modes = {'图片': 'image', '文字': 'text'}
-                    if len(parts) != 2 or parts[1] not in modes:
-                        raise HabitError('用法：/打卡 月历视图 图片|文字')
-                    self._set_display_mode(scope, origin, 'month', modes[parts[1]])
-                    label = '图片' if modes[parts[1]] == 'image' else '文字'
-                    reply = f'✅ 月历展示已切换为{label}模式。发送 /打卡 月历 查看。'
-                elif action in ('绑定', '解绑'):
-                    reply = self._binding_command(command, origin, raw_sender, is_group,
-                                                  union_openid, nick, adapter_type, app_id)
-                elif command in ('身份', '账户', '绑定状态'):
-                    reply = (f'👤 个人账户：{code}\n'
-                             f'发送者指纹：{uid_code}\n'
-                             f'接入：{adapter_type}\n'
-                             '同一机器人下相同 OpenID 自动共用账户，群号不再参与个人数据分区。\n'
-                             '只有发送者指纹不同时，才需用 /打卡 绑定 确认身份。')
-                elif action == '交互':
-                    modes = {'自动': 'auto', '按钮': 'keyboard', '文字链': 'links',
-                             '纯文字': 'text'}
-                    if len(parts) != 2 or parts[1] not in modes:
-                        raise HabitError('用法：/打卡 交互 自动|按钮|文字链|纯文字')
-                    self._set_ui_mode(scope, origin, modes[parts[1]])
-                    reply = f'✅ 本会话交互模式：{parts[1]}\n\n' + self._daily_status(scope, sender, nick, self._today())
-                elif command in ('按钮诊断', '按钮状态', '诊断'):
-                    report = self._last_delivery.get(origin, {})
-                    try:
-                        transport = QQTransport(event)
-                        api_state = transport.ctx.scene + ' / bot.api available'
-                    except Exception as exc:
-                        api_state = safe_error(exc)
-                    reply = (f'🔍 打卡诊断 v1.8.0\n账户：{code}\n'
-                             f'发送者指纹：{uid_code}\n'
-                             f'模式：{self._ui_mode(scope, origin)}\n'
-                             f'接口：{api_state}\n'
-                             f'最近发送：{report.get("mode", "not tried")}\n'
-                             f'接口确认：{report.get("ack", False)}\n'
-                             f'错误：{"; ".join(report.get("errors", [])) or "none"}\n'
-                             '接口接受不代表 QQ 客户端已显示按钮。\n'
-                             '群聊指令按钮填入后需手动发送；私聊才使用自动发送。\n'
-                             '可切换：/打卡 交互 文字链')
+                if action == "帮助":
+                    if len(parts) != 1:
+                        raise HabitError("用法：/打卡 帮助（自动使用你设置的默认帮助视图）")
+                    help_request, reply = True, HELP_TEXT
+                elif action == "视图":
+                    reply = self._view_command(event, parts[1:], scope, origin, code, uid_code)
+                elif action == "账户":
+                    reply = self._account_command(parts[1:], origin, raw_sender, is_group,
+                                                  union_openid, nick, adapter_type, app_id,
+                                                  code, uid_code)
                 else:
-                    text_calendar = action == '文字月历'
-                    if text_calendar:
-                        command = '月历' + command[len(action):]
-                    calendar_request = command.split(' ', 1)[0] in ('月历', '好友')
+                    calendar_request = action == "月历" or (action == "好友" and
+                                       len(parts) > 1 and parts[1] == "月历")
                     reply, img = self._dispatch(command, scope, sender, nick,
                                                 self._is_admin(event), is_group,
                                                 social_scope, account_id)
-                    if text_calendar or (calendar_request and self._display_mode(scope, origin, 'month') == 'text'):
+                    if calendar_request and self._display_mode(scope, origin, 'month') == 'text':
                         img = None
             except HabitError as exc:
-                reply, img = f'⚠️ {exc}', None
-                calendar_request = False
+                reply, img = f"⚠️ {exc}", None
+                calendar_request = help_request = False
             except Exception:
-                logger.exception('[daka 1.8] Command processing failed')
-                reply, img = '⚠️ 处理失败，请查看 AstrBot 日志。', None
-                calendar_request = False
+                logger.exception("[daka 1.9] Command processing failed")
+                reply, img = "⚠️ 处理失败，请查看 AstrBot 日志。", None
+                calendar_request = help_request = False
 
-            if calendar_request:
+            if help_request:
+                await self._send_help(event, scope, origin)
+            elif calendar_request:
                 await self._send_calendar(event, reply, img)
-            elif reply and '今日打卡' in reply and self._display_mode(scope, origin, 'daily') == 'image':
+            elif reply and "今日打卡" in reply and self._display_mode(scope, origin, "daily") == "image":
                 daily_img = self._make_daily_image(scope, sender, nick, self._today())
                 if daily_img:
                     await self._send_daily_image(event, reply, daily_img, scope, sender, nick, self._today())
@@ -589,12 +698,12 @@ class GroupDaka(Star):
                         self._last_delivery[origin] = report
                     except Exception as exc:
                         reason = safe_error(exc)
-                        self._last_delivery[origin] = {'mode': 'astrbot-text-fallback', 'errors': [reason]}
-                        logger.warning('[daka 1.8] Interactive send failed: %s', reason)
+                        self._last_delivery[origin] = {"mode": "astrbot-text-fallback", "errors": [reason]}
+                        logger.warning("[daka 1.9] Interactive send failed: %s", reason)
                         await self._send_plain(event, reply)
                 else:
                     await self._send_plain(event, reply)
-            elif reply and '今日打卡' in reply and adapter_type in OFFICIAL:
+            elif reply and "今日打卡" in reply and adapter_type in OFFICIAL:
                 try:
                     report = await send_status(event, reply,
                                                self.store.daily(scope, sender, self._today()),
@@ -602,221 +711,192 @@ class GroupDaka(Star):
                     self._last_delivery[origin] = report
                 except Exception as exc:
                     reason = safe_error(exc)
-                    self._last_delivery[origin] = {'mode': 'astrbot-text-fallback', 'errors': [reason]}
-                    logger.warning('[daka 1.8] Interactive send failed: %s', reason)
+                    self._last_delivery[origin] = {"mode": "astrbot-text-fallback", "errors": [reason]}
+                    logger.warning("[daka 1.9] Interactive send failed: %s", reason)
                     await self._send_plain(event, reply)
             elif reply:
                 await self._send_plain(event, reply)
         finally:
-            # All explicit sends have already happened at this point.
             event.stop_event()
 
-    def _dispatch(
-        self, command: str, scope: str, sender: str, nick: str, is_admin: bool,
-        is_group: bool = True, group_scope: str | None = None,
-        account_id: str | None = None,
-    ) -> tuple[str, str | None]:
-        parts = command.split()
-        today = self._today()
-        if not parts:
-            return self._daily_status(scope, sender, nick, today), None
-        if parts[0] in ("帮助", "help", "?"):
-            return HELP, None
-        action, *args = parts
-
-        if action == "\u89c4\u5219":
-            return RULE_HELP, None
-        if action in ("\u6e05\u5355", "\u4e60\u60ef", "\u8bbe\u7f6e"):
-            habits = self.store.list_habits(scope)
-            if args:
-                if len(args) != 1:
-                    raise HabitError("\u7528\u6cd5\uff1a/\u6253\u5361 \u8bbe\u7f6e [\u4efb\u52a1]")
-                habits = [self.store.habit(scope, self._canonical_habit(scope, args[0]))]
-            lines = ["\u2699\ufe0f \u4e2a\u4eba\u4efb\u52a1\u8bbe\u7f6e \u00b7 04:00 \u6362\u65e5"]
-            for index, h in enumerate(habits, 1):
-                timed = f"最佳{h['best_time']} · 半衰期{h['delay_minutes']}分" if h['best_time'] else "\u4e0d\u9650\u65f6"
-                lines.append(f"{index}. {h['name']} \u00b7 {h['target']}\u6b21/\u65e5 \u00b7 \u6743\u91cd{fmt_number(h['weight'])}\n   {timed}")
-            lines.append("\n/打卡 时间 睡觉 23:30 30\n/打卡 半衰期 睡觉 30\n/\u6253\u5361 \u6743\u91cd \u8fd0\u52a8 0\n/\u6253\u5361 \u89c4\u5219")
-            lines.append("\u4fee\u6539\u5f71\u54cd\u5f53\u5929\u53ca\u4ee5\u540e\uff0c\u4e0d\u6539\u5199\u5f80\u65e5\u3002")
+    def _task_command(self, args, scope, sender, nick, is_admin, today):
+        if not args or (len(args) == 1 and args[0] not in ("目标", "删除", "时间", "权重", "规则")):
+            name = self._canonical_habit(scope, args[0]) if args else None
+            self.store.ensure_rules(scope)
+            with self.store._db() as conn:
+                habits = self.store._rules_locked(conn, scope, today, include_disabled=True)
+            if name:
+                habits = [h for h in habits if h["name"] == name]
+                if not habits:
+                    raise HabitError(f"找不到任务「{name}」，发送 /打卡 任务 查看全部任务。")
+            lines = ["⚙️ 我的任务 · 04:00 换日"]
+            for h in habits:
+                status = "启用" if h["enabled"] else "已停用"
+                timed = (f"最佳 {h['best_time']} · 半衰期 {h['delay_minutes']} 分"
+                         if h['best_time'] else "不限时")
+                lines.append(f"{'✅' if h['enabled'] else '⏸️'} {h['name']} · {h['target']} 次/天 · "
+                             f"权重 {fmt_number(h['weight'])} · {status}\n   {timed}")
+            lines.append("\n管理：/打卡 任务 目标 阅读 2\n"
+                         "停用：/打卡 任务 删除 阅读\n"
+                         "规则：/打卡 任务 规则")
             return "\n".join(lines), None
 
-        schedule = action in ("\u6700\u4f73", "\u5ef6\u8fdf", "半衰期", "\u6743\u91cd", "\u65f6\u6bb5") or (action == "\u65f6\u95f4" and len(args) >= 2 and
-                   (":" in args[1] or args[1] == "\u5173\u95ed"))
-        if schedule:
-            if len(args) < 2:
-                raise HabitError("\u7528\u6cd5\uff1a/\u6253\u5361 \u65f6\u95f4 \u7761\u89c9 23:30 30\uff1b/\u6253\u5361 \u6743\u91cd \u8fd0\u52a8 1")
-            name = self._canonical_habit(scope, args[0])
-            if action == "\u6743\u91cd" and len(args) == 2:
-                self.store.configure(scope, name, weight=validate_weight(args[1]))
-            elif action in ("\u5ef6\u8fdf", "半衰期") and len(args) == 2:
-                self.store.configure(scope, name, delay_minutes=validate_delay(args[1]))
-            elif action == "\u6700\u4f73" and len(args) == 2:
-                self.store.configure(scope, name, best_time=validate_clock(args[1]))
-            elif action in ("\u65f6\u95f4", "\u65f6\u6bb5") and args[1] == "\u5173\u95ed" and len(args) == 2:
-                self.store.configure(scope, name, best_time=None)
-            elif action in ("\u65f6\u95f4", "\u65f6\u6bb5") and len(args) in (2, 3):
-                self.store.configure(scope, name, best_time=validate_clock(args[1]),
-                                     delay_minutes=validate_delay(args[2]) if len(args) == 3 else None)
-            else:
-                raise HabitError("\u53c2\u6570\u6570\u91cf\u4e0d\u6b63\u786e\uff0c\u8bf7\u53d1\u9001 /\u6253\u5361 \u5e2e\u52a9\u3002")
-            return self._status_after(f"\u2705 \u5df2\u66f4\u65b0\u300c{name}\u300d\uff0c\u5f53\u5929\u53ca\u4ee5\u540e\u751f\u6548\u3002", scope, sender, nick, today)
-
-        if action == "\u6062\u590d":
-            if len(args) != 1:
-                raise HabitError("\u7528\u6cd5\uff1a/\u6253\u5361 \u6062\u590d \u4efb\u52a1\u540d")
-            self.store.restore_habit(scope, args[0])
-            return self._status_after("\u2705 \u5df2\u6062\u590d\u4efb\u52a1\uff0c\u4fdd\u7559\u539f\u6709\u5386\u53f2\u3002", scope, sender, nick, today)
-
-        if action in ("今日", "今天", "进度"):
-            return self._daily_status(scope, sender, nick, today), None
-
-        if action in ("记录", "时间", "历史时间"):
-            return self._history_text(scope, sender, args, today), None
-
-        if action == "添加":
-            if not self.allow_member_add and not is_admin:
-                raise HabitError("管理员关闭了普通用户添加习惯的权限。")
-            if not 1 <= len(args) <= 3:
-                raise HabitError("\u7528\u6cd5\uff1a/\u6253\u5361 \u6dfb\u52a0 \u4efb\u52a1 [\u6b21\u6570] [\u6743\u91cd]")
-            target = self._positive_int(args[1]) if len(args) >= 2 else 1
-            weight = validate_weight(args[2]) if len(args) == 3 else 1.0
-            self.store.add_habit(scope, args[0], target, sender, self.max_habits)
-            self.store.configure(scope, args[0], weight=weight)
-            return self._status_after(f"✅ 已添加习惯「{args[0]}」，每日目标 {target} 次。", scope, sender, nick, today)
-
-        if action == "删除":
-            if len(args) != 1:
-                raise HabitError("用法：/打卡 删除 运动")
-            self.store.delete_habit(scope, self._canonical_habit(scope, args[0]), sender, is_admin)
-            return self._status_after(f"✅ 已停用「{args[0]}」，旧打卡记录仍保留在数据库中。", scope, sender, nick, today)
-
-        if action == "目标":
-            if len(args) != 2:
-                raise HabitError("用法：/打卡 目标 运动 3")
-            target = self._positive_int(args[1])
-            name = self._canonical_habit(scope, args[0])
+        kind, *values = args
+        if kind == "规则":
+            if values:
+                raise HabitError("用法：/打卡 任务 规则")
+            return RULE_HELP, None
+        if kind == "目标":
+            if len(values) != 2:
+                raise HabitError("用法：/打卡 任务 目标 阅读 2")
+            name, target_raw = values
+            if name in RESERVED_COMMANDS or name in RETIRED_COMMANDS or name.isdecimal():
+                raise HabitError("该名称与系统命令或编号打卡冲突，请换一个任务名称。")
+            name = self._canonical_habit(scope, name)
+            target = self._positive_int(target_raw)
             if self.store.has_history(scope, name):
                 self.store.configure(scope, name, target=target, enabled=1)
-                msg = f"\u2705 \u300c{name}\u300d\u6bcf\u65e5\u76ee\u6807 {target} \u6b21\u3002"
+                msg = f"✅ 已更新／恢复「{name}」：每天 {target} 次，历史记录保留。"
             else:
                 if not self.allow_member_add and not is_admin:
-                    raise HabitError("\u7ba1\u7406\u5458\u5173\u95ed\u4e86\u666e\u901a\u7528\u6237\u6dfb\u52a0\u4e60\u60ef\u7684\u6743\u9650\u3002")
+                    raise HabitError("管理员关闭了普通用户新建任务的权限。")
                 self.store.add_habit(scope, name, target, sender, self.max_habits)
-                msg = f"\u2705 \u5df2\u521b\u5efa\u300c{name}\u300d\uff0c\u6bcf\u65e5 {target} \u6b21\uff0c\u6743\u91cd 1\u3002"
+                msg = f"✅ 已创建「{name}」：每天 {target} 次，权重 1。"
+            return msg, None
+        if kind == "删除":
+            if len(values) != 1:
+                raise HabitError("用法：/打卡 任务 删除 阅读")
+            name = self._canonical_habit(scope, values[0])
+            self.store.delete_habit(scope, name, sender, is_admin)
+            return f"✅ 已停用「{name}」，历史记录保持不变。", None
+        if kind == "时间":
+            if len(values) not in (2, 3):
+                raise HabitError("用法：/打卡 任务 时间 睡觉 23:30 30；或 /打卡 任务 时间 运动 关闭")
+            name, raw = self._canonical_habit(scope, values[0]), values[1]
+            if raw == "关闭" and len(values) == 2:
+                self.store.configure(scope, name, best_time=None)
+            elif raw != "关闭":
+                self.store.configure(scope, name, best_time=validate_clock(raw),
+                                     delay_minutes=validate_delay(values[2]) if len(values) == 3 else None)
+            else:
+                raise HabitError("关闭时间规则时不需要半衰期参数。")
+            return f"✅ 「{name}」的时间规则已更新，从今天起生效。", None
+        if kind == "权重":
+            if len(values) != 2:
+                raise HabitError("用法：/打卡 任务 权重 阅读 0")
+            name = self._canonical_habit(scope, values[0])
+            self.store.configure(scope, name, weight=validate_weight(values[1]))
+            return f"✅ 「{name}」权重已更新，从今天起生效。", None
+        raise HabitError("任务命令不正确。发送 /打卡 帮助 查看全部正式命令。")
+
+    def _record_command(self, args, scope, sender, nick, today):
+        if args and args[0] == "补签":
+            values = args[1:]
+            if len(values) not in (2, 3):
+                raise HabitError("用法：/打卡 记录 补签 睡觉 昨天 23:50（每次只能补签 1 次）")
+            name = self._canonical_habit(scope, values[0])
+            day = validate_day(values[1], today, self.max_backfill)
+            completed = parse_backfill_time(day, values[2], self.tz, self._now()) if len(values) == 3 else None
+            return self._perform_checkin(scope, sender, name, day, 1, nick, today,
+                                         occurred_at=completed, explicit_backfill=True)
+        if args and args[0] == "清除":
+            values = args[1:]
+            if len(values) not in (1, 2):
+                raise HabitError("用法：/打卡 记录 清除 睡觉 [昨天/日期]")
+            name = self._canonical_habit(scope, values[0])
+            day = validate_day(values[1] if len(values) == 2 else None, today, self.max_backfill)
+            changed = self.store.undo(scope, sender, name, day)
+            msg = (f"↩️ 已清除 {day} 的「{name}」全部打卡记录。" if changed
+                   else f"{day} 的「{name}」暂无打卡记录。")
             return self._status_after(msg, scope, sender, nick, today)
+        return self._history_text(scope, sender, args, today), None
 
-        if action in ("撤销", "取消"):
-            if not 1 <= len(args) <= 2:
-                raise HabitError("用法：/打卡 撤销 早起 [昨天/日期]")
-            selected = validate_day(args[1] if len(args) == 2 else None, today, self.max_backfill)
-            changed = self.store.undo(scope, sender, self._canonical_habit(scope, args[0]), selected)
-            message = (f"↩️ 已清除 {selected} 的「{args[0]}」记录。" if changed
-                       else "这一天还没有这个习惯的打卡记录。")
-            return self._status_after(message, scope, sender, nick, today)
-
-        if action == "\u8865\u7b7e":
-            if not 2 <= len(args) <= 4:
-                raise HabitError("\u7528\u6cd5\uff1a/\u6253\u5361 \u8865\u7b7e \u7761\u89c9 \u6628\u5929 23:50 [\u6b21\u6570]")
-            name = self._canonical_habit(scope, args[0])
-            selected = validate_day(args[1], today, self.max_backfill)
-            amount, occurred = 1, None
-            seen_count = False
-            for token in args[2:]:
-                if ":" in token and occurred is None:
-                    occurred = parse_backfill_time(selected, token, self.tz, self._now())
-                elif not seen_count and ":" not in token:
-                    amount = self._positive_int(token.removeprefix("+"))
-                    seen_count = True
-                else:
-                    raise HabitError("\u8865\u7b7e\u53c2\u6570\u91cd\u590d\u6216\u4e0d\u6b63\u786e\u3002")
-            return self._perform_checkin(scope, sender, name, selected, amount, nick, today,
-                                         occurred_at=occurred, explicit_backfill=True)
-
+    def _friend_command(self, args, group_scope, scope, sender, nick, today):
+        if group_scope is None:
+            raise HabitError("好友功能仅支持群聊或绑定过群聊的私聊。")
+        if not args:
+            raise HabitError("用法：/打卡 好友 月历 昵称；/打卡 好友 排行；/打卡 好友 隐私 隐藏|公开")
+        action, *values = args
         if action == "隐私":
-            if len(args) != 1 or args[0] not in ("隐藏", "公开"):
-                raise HabitError("用法：/打卡 隐私 隐藏 或 /打卡 隐私 公开")
-            public = args[0] == "公开"
-            if group_scope is None or account_id is None:
-                raise HabitError("隐私设置请在群聊或已绑定群的私聊中执行。")
+            if len(values) != 1 or values[0] not in ("隐藏", "公开"):
+                raise HabitError("用法：/打卡 好友 隐私 隐藏|公开")
+            public = values[0] == "公开"
+            # The current user ID is recovered from this per-person scope.
+            account_id = scope.removeprefix("person:")
             self.store.set_visible(group_scope, account_id, public)
-            return ("🔒 已隐藏：好友查询和月度排行榜不再显示你的记录；"
-                    "但你自己发出的打卡群消息仍然可见。" if not public else
-                    "🔓 已公开：好友可以查看你的打卡月历，排行榜会重新计入你。"), None
-
-        if action in ("排行", "排行榜"):
-            if group_scope is None:
-                raise HabitError("排行榜只在群聊或已绑定群的私聊中可查看。")
-            if len(args) > 1:
-                raise HabitError("用法：/打卡 排行 [YYYY-MM]")
-            year, month = validate_month(args[0] if args else None, today)
+            return ("🔒 已隐藏：好友查询和排行榜不再展示你的记录。"
+                    if not public else "🔓 已公开：你的月历与排行重新可见。"), None
+        if action == "排行":
+            if len(values) > 1:
+                raise HabitError("用法：/打卡 好友 排行 [YYYY-MM]")
+            year, month = validate_month(values[0] if values else None, today)
             self.store.upgrade_group_members(group_scope)
             members = self.store.group_rankings(group_scope, year, month)
             if not members:
-                return f"📊 {year}-{month:02d} 还没有公开的已完成打卡记录。", None
-            lines = [f"🏆 {year}-{month:02d} 群友打卡排行榜", "\u6309\u6708\u5ea6\u52a0\u6743\u5b8c\u6210\u5ea6\u6392\u5e8f\uff08\u542b\u8fdf\u5230\u6263\u5206\uff09"]
+                return f"📊 {year}-{month:02d} 暂无公开的打卡记录。", None
+            lines = [f"🏆 {year}-{month:02d} 群友打卡排行榜",
+                     "按月度加权完成度排序（含迟到扣分）"]
             for i, member in enumerate(members[:20], start=1):
-                lines.append(f"{i}. {member['display_name']}  {fmt_percent(member['ratio'])}  ({fmt_number(member['earned'])}/{fmt_number(member['weight'])})")
+                lines.append(f"{i}. {member['display_name']}  {fmt_percent(member['ratio'])}  "
+                             f"({fmt_number(member['earned'])}/{fmt_number(member['weight'])})")
             return "\n".join(lines), None
-
         if action == "月历":
-            if len(args) > 2:
-                raise HabitError("用法：/打卡 月历 [习惯名] [YYYY-MM]")
-            year, month, chosen = self._parse_calendar_args(args, today)
-            return self._make_calendar(scope, sender, nick, chosen, year, month, today)
-
-        if action == "好友":
-            if not 1 <= len(args) <= 3:
-                raise HabitError("用法：/打卡 好友 昵称 [习惯名] [YYYY-MM]")
-            if group_scope is None:
-                raise HabitError("好友记录只在群聊或已绑定群的私聊中可查看。")
+            if not 1 <= len(values) <= 3:
+                raise HabitError("用法：/打卡 好友 月历 昵称 [习惯] [YYYY-MM]")
             self.store.upgrade_group_members(group_scope)
-            friend = self.store.group_friend(group_scope, args[0].removeprefix("@"))
-            year, month, chosen = self._parse_calendar_args(args[1:], today)
+            friend = self.store.group_friend(group_scope, values[0].removeprefix("@"))
+            year, month, chosen = self._parse_calendar_args(values[1:], today)
             return self._make_calendar(
                 self.store.person_scope(friend["user_id"]), self.store.SELF,
                 friend["display_name"], chosen, year, month, today
             )
+        raise HabitError("用法：/打卡 好友 月历 昵称；/打卡 好友 排行；/打卡 好友 隐私 隐藏|公开")
 
-        if action == "提醒":
-            if not is_group:
-                raise HabitError("请在群聊设置提醒。")
-            if not is_admin:
-                raise HabitError("只有 AstrBot 管理员可以设置群定时提醒。")
-            if len(args) != 1:
-                raise HabitError("用法：/打卡 提醒 21:30")
-            self.store.set_reminder(group_scope, args[0])
-            return (f"⏰ 已设置本群每日 {args[0]} 习惯提醒（{self.tz.key}）。\n"
-                    "提示：QQ 官方机器人可能限制主动群消息，建议先观察实际推送。"), None
-
-        if action == "关闭提醒":
-            if not is_group:
-                raise HabitError("请在群聊关闭提醒。")
-            if not is_admin:
-                raise HabitError("只有 AstrBot 管理员可以关闭群定时提醒。")
+    def _group_command(self, args, group_scope, is_group, is_admin):
+        if not is_group:
+            raise HabitError("请在群聊设置提醒。")
+        if not is_admin:
+            raise HabitError("只有 AstrBot 管理员可以设置群提醒。")
+        if len(args) != 2 or args[0] != "提醒":
+            raise HabitError("用法：/打卡 群设置 提醒 21:30；或 /打卡 群设置 提醒 关闭")
+        if args[1] == "关闭":
             self.store.disable_reminder(group_scope)
-            return "⏰ 已关闭本群的习惯提醒。", None
+            return "⏰ 已关闭本群每日打卡提醒。", None
+        clock = validate_clock(args[1])
+        self.store.set_reminder(group_scope, clock)
+        return (f"⏰ 本群每日 {clock} 提醒已设置（{self.tz.key}）。\n"
+                "QQ 官方机器人可能限制主动群消息，请观察实际推送。"), None
 
-        # Dynamic name OR a numeric quick-action shown by /打卡.
-        if action.isascii() and action.isdecimal():
-            index = int(action)
-            habits = self.store.list_habits(scope)
-            if index < 1 or index > len(habits):
-                raise HabitError("序号超出范围，请发送 /打卡 查看对应习惯。")
-            action = habits[index - 1]["name"]
-
-        # Dynamic named habit e.g. /打卡 早睡 or /打卡 喝水 +2
-        if len(args) > 2:
-            raise HabitError("用法：/打卡 习惯名 [+次数] [今天/昨天/日期]")
-        amount, day_arg = 1, None
-        for value in args:
-            if re.fullmatch(r"\+\d+", value):
-                amount = self._positive_int(value[1:])
-            elif day_arg is None:
-                day_arg = value
-            else:
-                raise HabitError("打卡参数格式不正确。")
-        selected = validate_day(day_arg, today, self.max_backfill)
-        return self._perform_checkin(scope, sender, self._canonical_habit(scope, action), selected, amount, nick, today)
+    def _dispatch(self, command: str, scope: str, sender: str, nick: str,
+                  is_admin: bool, is_group: bool = True,
+                  group_scope: str | None = None,
+                  account_id: str | None = None) -> tuple[str, str | None]:
+        parts = command.split()
+        today = self._today()
+        if not parts:
+            return self._daily_status(scope, sender, nick, today), None
+        action, *args = parts
+        if action == "任务":
+            return self._task_command(args, scope, sender, nick, is_admin, today)
+        if action == "记录":
+            return self._record_command(args, scope, sender, nick, today)
+        if action == "月历":
+            if len(args) > 2:
+                raise HabitError("用法：/打卡 月历 [习惯] [YYYY-MM]")
+            year, month, chosen = self._parse_calendar_args(args, today)
+            return self._make_calendar(scope, sender, nick, chosen, year, month, today)
+        if action == "好友":
+            return self._friend_command(args, group_scope, scope, sender, nick, today)
+        if action == "群设置":
+            return self._group_command(args, group_scope, is_group, is_admin)
+        if action.isdecimal() or re.fullmatch(r"\+\d+", action):
+            raise HabitError("新版不支持编号打卡；请直接发送 /打卡 睡觉 等习惯名称。")
+        if action in RETIRED_COMMANDS:
+            raise HabitError("该旧命令已合并。请发送 /打卡 帮助 查看新命令体系。")
+        if args:
+            raise HabitError("单次打卡不能附带次数或日期。请发送 /打卡 习惯名称；历史补签请用 /打卡 记录 补签。")
+        return self._perform_checkin(scope, sender, self._canonical_habit(scope, action),
+                                     today, 1, nick, today)
 
     @staticmethod
     def _positive_int(raw: str) -> int:
@@ -846,8 +926,8 @@ class GroupDaka(Star):
     def _perform_checkin(self, scope, sender, name, day, amount, nick, today,
                          occurred_at=None, explicit_backfill=False):
         habit = self.store.rule_for_day(scope, name, day)
-        if habit["target"] == 1 and amount != 1:
-            raise HabitError(f"\u300c{name}\u300d\u662f\u6bcf\u65e5\u4e00\u6b21\u7684\u4efb\u52a1\u3002")
+        if amount != 1:
+            raise HabitError("每次只能打卡 1 次。")
         when = self._now()
         backfill = explicit_backfill or day != today
         result = self.store.checkin(scope, sender, name, day, amount, checked_at=when,

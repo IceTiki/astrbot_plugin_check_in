@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Offline source-only updater. Never invoke AstrBot's plugin uninstall API.
 
-Usage: python3 update_astrbot_daka_v1.8.0.py ./astrbot_plugin_daka_v1.8.0.zip
+Usage: python3 update_astrbot_daka_v1.9.0.py ./astrbot_plugin_daka_v1.9.0.zip
 Only Python's standard library and the already-installed Docker CLI are used.
 """
 from __future__ import annotations
@@ -20,7 +20,7 @@ import tempfile
 import zipfile
 
 NAME = 'astrbot_plugin_daka'
-VERSION = '1.8.0'
+VERSION = '1.9.0'
 
 
 def docker(*args: str) -> str:
@@ -45,12 +45,12 @@ def validate_archive(path: Path) -> list[zipfile.ZipInfo]:
             seen.add(entry.filename)
         required = {f'{NAME}/{name}' for name in
                     ('main.py','accounts.py','store.py','qq_transport.py','metadata.yaml',
-                     'scoring.py','scored_store.py','panel.py','weighted_calendar.py','daily_image.py','task_colors.py')}
+                     'scoring.py','scored_store.py','panel.py','weighted_calendar.py','daily_image.py','task_colors.py','help_content.py','help_image.py')}
         if not required <= seen:
             raise ValueError('Required plugin files are missing.')
         metadata = archive.read(f'{NAME}/metadata.yaml').decode('utf-8')
-        if not re.search(r'^version:\s*1\.8\.0\s*$', metadata, re.M):
-            raise ValueError('This updater only installs version 1.8.0.')
+        if not re.search(r'^version:\s*1\.9\.0\s*$', metadata, re.M):
+            raise ValueError('This updater only installs version 1.9.0.')
         if not re.search(r'^name:\s*astrbot_plugin_daka\s*$', metadata, re.M):
             raise ValueError('Plugin name mismatch.')
         broken = archive.testzip()

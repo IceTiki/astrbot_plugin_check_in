@@ -211,7 +211,7 @@ class CheckinStore:
                 (scope, name),
             ).fetchone()
         if row is None:
-            raise HabitError(f"没有找到习惯「{name}」，可发送 /打卡 清单 查看。")
+            raise HabitError(f"没有找到习惯「{name}」，请发送 /打卡 任务 查看。")
         return dict(row)
 
     def add_habit(self, scope: str, name: str, target: int, user_id: str, cap: int = 64) -> None:
@@ -518,7 +518,7 @@ class CheckinStore:
         from datetime import timezone
 
         if not re.fullmatch(r"[0-9A-Fa-f]{16}", secret):
-            raise HabitError("绑定码格式不正确。请先私聊机器人发送 /打卡 绑定。")
+            raise HabitError("绑定码格式不正确。请先私聊机器人发送 /打卡 账户 绑定。")
         hashed = hashlib.sha256(secret.upper().encode("ascii")).hexdigest()
         now = datetime.now(timezone.utc).isoformat()
         with self._db() as conn:
