@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import calendar
 import hashlib
+import json
 import hmac
 import secrets
 import time
@@ -40,23 +41,15 @@ from .qq_transport import (QQTransport, app_id_of, platform_name, send_status, s
 
 COMMAND_TOKEN = re.compile(r"(?:^|\s)[/／]?打卡(?=\s|$)")
 PERSONAL_PREF_ORIGIN = "__person__"
-RESERVED_COMMANDS = {"任务", "记录", "视图", "好友", "账户", "群设置",
-                     "月历", "帮助", "调试"}
-RETIRED_COMMANDS = {
-    "今日", "今天", "进度", "清单", "习惯", "设置", "添加", "删除", "恢复",
-    "目标", "权重", "时间", "时段", "最佳", "延迟", "半衰期", "规则",
-    "撤销", "取消", "补签", "隐私", "排行", "排行榜", "文字月历",
-    "交互", "显示", "月历视图", "月历样式", "月历展示",
-    "身份", "绑定", "解绑", "绑定状态", "诊断", "按钮诊断", "按钮状态",
-    "提醒", "关闭提醒", "历史时间", "help", "?",
-}
+from .command_names import RESERVED_COMMANDS, RETIRED_COMMANDS, validate_task_name
+
 
 RULE_HELP = """📐 连续半衰期计分（v1.7）
 打卡日：04:00 至次日 03:59:59（配置时区）。
 提前或准时完成得100%；超过最佳时间后立即连续下降。
 每经过一个半衰期H，剩余得分降到一半；晚2H得25%，晚3H得12.5%。
 时间系数 = 2 ** (-迟到分钟 / H)，迟到分钟取 max(0, 实际时间-最佳时间)。
-例：睡觉最佳23:30、H=30分钟：23:45 得70.7%，次日00:00得50%，次日00:30得25%。
+例：睡觉最佳23:30、H=60分钟：23:45 得84.1%，次日00:30得50%，次日01:30得25%。
 任务得分 = 权重 × 目标次数内各次打卡时间系数之和 / 目标次数。
 每日完成度=当天累计得分/当天有效权重，月完成度按已计入日期累计。
 多次任务各次独立计分；权重为0可记录但不影响总分。
@@ -677,7 +670,7 @@ class GroupDaka(Star):
                                        len(parts) > 1 and parts[1] == "月历")
                     reply, img = self._dispatch(command, scope, sender, nick,
                                                 self._is_admin(event), is_group,
-                                                social_scope, account_id)
+                                                social_scope, account_id, operator_scope=self.store.person_scope(account_id))
                     if calendar_request and self._display_mode(scope, origin, 'month') == 'text':
                         img = None
             except HabitError as exc:
@@ -725,24 +718,380 @@ class GroupDaka(Star):
         finally:
             event.stop_event()
 
-    def _debug_command(self, args: list[str], scope: str, is_admin: bool) -> tuple[str, None]:
-        """High-risk task maintenance. Strict administrator + two-step confirmation."""
+    @staticmethod
+    def _debug_table_exists(conn, table: str) -> bool:
+        return conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
+        ).fetchone() is not None
+
+    def _debug_account_snapshot(self, conn, account_id: str) -> dict:
+        """Fingerprint a user, including merged account lineage and imported legacy rows."""
+        if not re.fullmatch(r"[a-f0-9]{32}", account_id):
+            raise HabitError("账户 ID 格式不正确；请从用户列表复制完整账户 ID。")
+        family = {account_id}
+        if self._debug_table_exists(conn, "account_redirects"):
+            changed = True
+            while changed:
+                changed = False
+                for row in conn.execute("SELECT source,target FROM account_redirects").fetchall():
+                    if row["target"] in family and row["source"] not in family:
+                        family.add(row["source"])
+                        changed = True
+        ids = sorted(family)
+        scopes = sorted("person:" + item for item in ids)
+        placeholders = ",".join("?" for _ in ids)
+        scope_ph = ",".join("?" for _ in scopes)
+
+        aliases = []
+        if self._debug_table_exists(conn, "person_aliases"):
+            aliases = [r["alias"] for r in conn.execute(
+                f"SELECT alias FROM person_aliases WHERE account_id IN ({placeholders}) ORDER BY alias",
+                ids).fetchall()]
+        legacy_pairs = set()
+        if self._debug_table_exists(conn, "imported_legacy"):
+            legacy_pairs.update((r["old_scope"], r["old_user_id"]) for r in conn.execute(
+                f"SELECT old_scope,old_user_id FROM imported_legacy "
+                f"WHERE account_id IN ({placeholders})", ids).fetchall())
+
+        # Recover exact old per-conversation keys that were never imported yet.
+        platform_pairs = set()
+        for alias in aliases:
+            if alias.startswith("qqv2:"):
+                continue
+            instance = alias.split(":", 1)[0].lower()
+            if any(marker in alias for marker in (
+                ":qq-uin:", ":uin:", ":official-c2c:", ":official-group:",
+                ":official-group:", ":unknown:", ":union:",
+            )):
+                platform_pairs.add((instance, alias.rsplit(":", 1)[-1]))
+            for marker in (":group:", ":private:", ":official-group:",
+                           ":unknown:group:", ":unknown:private:"):
+                prefix = instance + marker
+                if alias.startswith(prefix):
+                    tail = alias[len(prefix):]
+                    if ":" in tail:
+                        old_scope, old_user = tail.rsplit(":", 1)
+                        if old_scope and old_user:
+                            legacy_pairs.add((old_scope, old_user))
+                    break
+        legacy_pairs = sorted(legacy_pairs)
+        platform_pairs = sorted(platform_pairs)
+
+        digest = hashlib.sha256()
+        counts = {"accounts": len(ids), "habits": 0, "rules": 0,
+                  "records": 0, "events": 0, "legacy_scopes": len(legacy_pairs)}
+
+        def include(label: str, rows):
+            digest.update((label + "\n").encode("utf-8"))
+            for row in rows:
+                digest.update(json.dumps(tuple(row), ensure_ascii=False,
+                                         separators=(",", ":"), default=str).encode("utf-8"))
+                digest.update(b"\n")
+
+        def rows_for(table: str, where: str, params: tuple):
+            if not self._debug_table_exists(conn, table):
+                return []
+            return conn.execute(f"SELECT * FROM {table} WHERE {where} ORDER BY rowid",
+                                params).fetchall()
+
+        # Include all per-person tables for every merged account ID.
+        scope_tables = ("groups", "habits", "records", "checkin_events",
+                        "habit_rules", "score_profiles", "ui_preferences", "reminders")
+        for table in scope_tables:
+            rows = rows_for(table, f"scope IN ({scope_ph})", tuple(scopes))
+            include(table + ":person", rows)
+            if table == "habits":
+                counts["habits"] += len(rows)
+            elif table == "habit_rules":
+                counts["rules"] += len(rows)
+            elif table == "records":
+                counts["records"] += len(rows)
+            elif table == "checkin_events":
+                counts["events"] += len(rows)
+
+        for table, where, params in (
+            ("person_accounts", f"id IN ({placeholders})", tuple(ids)),
+            ("person_aliases", f"account_id IN ({placeholders})", tuple(ids)),
+            ("account_redirects", f"source IN ({placeholders}) OR target IN ({placeholders})",
+             tuple(ids) + tuple(ids)),
+            ("imported_legacy", f"account_id IN ({placeholders})", tuple(ids)),
+            ("members", f"user_id IN ({placeholders})", tuple(ids)),
+        ):
+            rows = rows_for(table, where, params)
+            include(table + ":account", rows)
+
+        for old_scope, old_user in legacy_pairs:
+            for table in ("records", "checkin_events", "members"):
+                rows = rows_for(table, "scope=? AND user_id=?", (old_scope, old_user))
+                include(f"{table}:legacy:{old_scope}:{old_user}", rows)
+                if table == "records":
+                    counts["records"] += len(rows)
+                elif table == "checkin_events":
+                    counts["events"] += len(rows)
+
+        # Binding links have no account_id column; resolve them using exact
+        # instance + sender identifiers extracted from the account's aliases.
+        matching_links = []
+        matching_tokens = []
+        if self._debug_table_exists(conn, "dm_links"):
+            for row in conn.execute("SELECT * FROM dm_links ORDER BY rowid").fetchall():
+                private_instance = str(row["private_origin"]).split(":", 1)[0].lower()
+                group_instance = str(row["group_scope"]).split(":", 1)[0].lower()
+                if ((private_instance, str(row["private_user_id"])) in platform_pairs or
+                    (group_instance, str(row["group_user_id"])) in platform_pairs):
+                    matching_links.append(tuple(row))
+            include("dm_links:account", matching_links)
+        if self._debug_table_exists(conn, "dm_link_tokens"):
+            for row in conn.execute("SELECT * FROM dm_link_tokens ORDER BY rowid").fetchall():
+                instance = str(row["private_origin"]).split(":", 1)[0].lower()
+                if (instance, str(row["private_user_id"])) in platform_pairs:
+                    matching_tokens.append(tuple(row))
+            include("dm_link_tokens:account", matching_tokens)
+
+        # The display fields are part of the fingerprint, so nickname/alias
+        # changes after preview also invalidate a whole-user deletion token.
+        include("aliases:normalized", [(a,) for a in aliases])
+        include("legacy_pairs:normalized", legacy_pairs)
+        include("platform_pairs:normalized", platform_pairs)
+        return {
+            "family": ids, "scopes": scopes, "aliases": aliases,
+            "legacy_pairs": legacy_pairs, "platform_pairs": platform_pairs,
+            "matching_links": matching_links, "matching_tokens": matching_tokens,
+            "counts": counts, "fingerprint": digest.hexdigest(),
+        }
+
+    @staticmethod
+    def _debug_alias_labels(aliases: list[str]) -> list[str]:
+        values = []
+        for alias in aliases:
+            label = None
+            if ":openid:" in alias:
+                label = "OpenID"
+            elif ":union:" in alias:
+                label = "UnionID"
+            elif ":qq-uin:" in alias or ":uin:" in alias:
+                label = "QQ/UIN"
+            elif ":official-c2c:" in alias:
+                label = "私聊SID"
+            elif ":official-group:" in alias:
+                label = "群SID"
+            elif ":unknown:" in alias:
+                label = "平台ID"
+            elif ":group:" in alias or ":private:" in alias:
+                label = "旧版ID"
+            if label:
+                value = alias.rsplit(":", 1)[-1]
+                rendered = label + "=" + value[:72]
+                if value and rendered not in values:
+                    values.append(rendered)
+        return values[:4]
+
+    def _debug_user_list(self, args: list[str], is_admin: bool) -> tuple[str, None]:
         if not is_admin:
-            raise HabitError("调试更名和彻底删除仅限 AstrBot 管理员操作。")
-        usage = ("🔧 调试命令（只影响你当前的个人账户）\n"
+            raise HabitError("用户列表仅限 AstrBot 管理员。")
+        if len(args) > 1 or (args and not args[0].isdecimal()):
+            raise HabitError("用法：/打卡 调试 用户列表 [页码]")
+        # Bound conversion to avoid Python's integer-string digit limit on
+        # intentionally oversized admin input; such a page clamps to the last.
+        requested_page = (10**9 if args and len(args[0]) > 9
+                          else max(1, int(args[0])) if args else 1)
+        page_size = 5
+        with self.store._db() as conn:
+            total = conn.execute("""
+                SELECT COUNT(*) FROM person_accounts a
+                WHERE NOT EXISTS (SELECT 1 FROM account_redirects r WHERE r.source=a.id)
+            """).fetchone()[0]
+            max_page = max(1, (int(total) + page_size - 1) // page_size)
+            page = min(requested_page, max_page)
+            rows = conn.execute("""
+                SELECT a.id,a.created_at
+                FROM person_accounts a
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM account_redirects r WHERE r.source=a.id
+                )
+                ORDER BY a.created_at DESC,a.id LIMIT ? OFFSET ?
+            """, (page_size, (page-1)*page_size)).fetchall()
+            if not rows:
+                return (f"第 {page} 页没有用户。共 {total} 个账户；"
+                        "请使用 /打卡 调试 用户列表 查看第一页。"), None
+            lines = [f"👥 用户列表 · 第 {page} 页 / 共 {total} 个账户"]
+            for row in rows:
+                account_id = row["id"]
+                # Show nicknames and identifiers for the canonical merged account.
+                nicknames = [r["display_name"] for r in conn.execute(
+                    "SELECT DISTINCT display_name FROM members WHERE user_id=? "
+                    "ORDER BY display_name LIMIT 4", (account_id,)).fetchall()]
+                aliases = [r["alias"] for r in conn.execute(
+                    "SELECT alias FROM person_aliases WHERE account_id=? ORDER BY alias",
+                    (account_id,)).fetchall()]
+                labels = self._debug_alias_labels(aliases)
+                lines.append(
+                    f"昵称：{'、'.join(nicknames) if nicknames else '暂无群昵称'}\n"
+                    f"账户ID：{account_id}\n"
+                    f"SID/平台标识：{'；'.join(labels) if labels else '暂无可识别标识'}\n"
+                    f"创建：{row['created_at']}"
+                )
+            if (page * page_size) < total:
+                lines.append(f"下一页：/打卡 调试 用户列表 {page+1}")
+            lines.append("跨用户操作请使用列表中的完整账户ID。")
+            return "\n\n".join(lines), None
+
+    def _debug_delete_user(self, args: list[str], operator_scope: str,
+                           is_admin: bool) -> tuple[str, None]:
+        if not is_admin:
+            raise HabitError("彻底删除用户仅限 AstrBot 管理员。")
+        if len(args) not in (1, 3) or (len(args) == 3 and args[1] != "确认"):
+            raise HabitError("用法：/打卡 调试 删除用户 账户ID；预览后发送 /打卡 调试 删除用户 账户ID 确认 确认码")
+        target_id = args[0].lower()
+        if not re.fullmatch(r"[a-f0-9]{32}", target_id):
+            raise HabitError("账户 ID 格式不正确，请从 /打卡 调试 用户列表 复制完整账户ID。")
+        actor_id = operator_scope.removeprefix("person:")
+        key = "delete-user:" + operator_scope + ":" + target_id
+        if len(args) == 1:
+            with self.store._db() as conn:
+                target_id = self.store._root_locked(conn, target_id)
+                if target_id == actor_id:
+                    raise HabitError("不能删除当前操作者自己的账户。")
+                if not conn.execute("SELECT 1 FROM person_accounts WHERE id=?", (target_id,)).fetchone():
+                    raise HabitError("未找到该账户 ID。请先使用用户列表查询。")
+                snap = self._debug_account_snapshot(conn, target_id)
+                nicknames = [r["display_name"] for r in conn.execute(
+                    "SELECT DISTINCT display_name FROM members WHERE user_id IN (" +
+                    ",".join("?" for _ in snap["family"]) + ") ORDER BY display_name LIMIT 6",
+                    tuple(snap["family"])).fetchall()]
+            code = secrets.token_hex(6).upper()
+            self._debug_pending[key] = {
+                "code": code, "expires": time.monotonic()+300,
+                "fingerprint": snap["fingerprint"], "target": target_id,
+                "operator": operator_scope,
+            }
+            c = snap["counts"]
+            return (f"⚠️ 永久删除用户预览\n昵称：{'、'.join(nicknames) if nicknames else '暂无群昵称'}\n"
+                    f"账户ID：{target_id}\n合并账户历史：{len(snap['family'])} 个账户\n"
+                    f"任务 {c['habits']} 条、规则 {c['rules']} 条、日记录 {c['records']} 条、"
+                    f"打卡事件 {c['events']} 条、旧会话 {c['legacy_scopes']} 个。\n"
+                    "将删除账户身份、个人任务与记录，并清理可识别的旧会话记录及绑定关系。\n"
+                    "执行前会生成 SQLite 备份；备份文件不会自动删除。\n"
+                    f"五分钟内确认：/打卡 调试 删除用户 {target_id} 确认 {code}"), None
+
+        code = args[2].upper()
+        pending = self._debug_pending.get(key)
+        if (not pending or pending["expires"] < time.monotonic() or
+                pending["target"] != target_id or pending["operator"] != operator_scope or
+                not hmac.compare_digest(pending["code"], code)):
+            raise HabitError("确认码无效、已过期或操作者不匹配，请重新预览。")
+        # First compare, then make a consistent backup, then re-check inside
+        # BEGIN IMMEDIATE to close the race between the preview and deletion.
+        with self.store._db() as conn:
+            target_id = self.store._root_locked(conn, target_id)
+            snap = self._debug_account_snapshot(conn, target_id)
+        if snap["fingerprint"] != pending["fingerprint"]:
+            self._debug_pending.pop(key, None)
+            raise HabitError("预览后用户数据发生变化，已中止，请重新预览。")
+        backup = backup_before_edit(
+            self.store.db_path,
+            Path(get_astrbot_data_path()) / "backups" / "astrbot_plugin_daka" / "maintenance",
+            "purge",
+        )
+        with self.store._db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            target_id = self.store._root_locked(conn, target_id)
+            fresh = self._debug_account_snapshot(conn, target_id)
+            if fresh["fingerprint"] != pending["fingerprint"]:
+                self._debug_pending.pop(key, None)
+                raise HabitError("备份后用户数据仍发生变化，已中止，请重新预览。")
+            family = fresh["family"]
+            scopes = fresh["scopes"]
+            legacy_pairs = fresh["legacy_pairs"]
+            platform_pairs = set(fresh["platform_pairs"])
+            for table in ("checkin_events", "records", "habit_rules", "habits",
+                          "score_profiles", "groups", "ui_preferences", "reminders"):
+                if self._debug_table_exists(conn, table):
+                    conn.execute(f"DELETE FROM {table} WHERE scope IN (" +
+                                 ",".join("?" for _ in scopes) + ")", tuple(scopes))
+            if self._debug_table_exists(conn, "members"):
+                conn.execute("DELETE FROM members WHERE user_id IN (" +
+                             ",".join("?" for _ in family) + ")", tuple(family))
+            for old_scope, old_user in legacy_pairs:
+                for table in ("records", "checkin_events", "members"):
+                    if self._debug_table_exists(conn, table):
+                        conn.execute(f"DELETE FROM {table} WHERE scope=? AND user_id=?",
+                                     (old_scope, old_user))
+            if self._debug_table_exists(conn, "dm_links"):
+                for row in conn.execute("SELECT * FROM dm_links").fetchall():
+                    pi = str(row["private_origin"]).split(":",1)[0].lower()
+                    gi = str(row["group_scope"]).split(":",1)[0].lower()
+                    if ((pi, str(row["private_user_id"])) in platform_pairs or
+                            (gi, str(row["group_user_id"])) in platform_pairs):
+                        conn.execute("DELETE FROM dm_links WHERE private_origin=? AND private_user_id=?",
+                                     (row["private_origin"], row["private_user_id"]))
+            if self._debug_table_exists(conn, "dm_link_tokens"):
+                for row in conn.execute("SELECT * FROM dm_link_tokens").fetchall():
+                    pi = str(row["private_origin"]).split(":",1)[0].lower()
+                    if (pi, str(row["private_user_id"])) in platform_pairs:
+                        conn.execute("DELETE FROM dm_link_tokens WHERE token_hash=?",
+                                     (row["token_hash"],))
+            if self._debug_table_exists(conn, "person_aliases"):
+                conn.execute("DELETE FROM person_aliases WHERE account_id IN (" +
+                             ",".join("?" for _ in family) + ")", tuple(family))
+            if self._debug_table_exists(conn, "imported_legacy"):
+                conn.execute("DELETE FROM imported_legacy WHERE account_id IN (" +
+                             ",".join("?" for _ in family) + ")", tuple(family))
+            if self._debug_table_exists(conn, "account_redirects"):
+                conn.execute("DELETE FROM account_redirects WHERE source IN (" +
+                             ",".join("?" for _ in family) + ") OR target IN (" +
+                             ",".join("?" for _ in family) + ")", tuple(family)+tuple(family))
+            conn.execute("DELETE FROM person_accounts WHERE id IN (" +
+                         ",".join("?" for _ in family) + ")", tuple(family))
+        self._debug_pending.pop(key, None)
+        return f"✅ 已彻底删除用户 {target_id} 及其可关联的历史数据。操作前备份：{backup}", None
+
+    def _debug_command(self, args: list[str], scope: str, is_admin: bool,
+                       operator_scope: str | None = None,
+                       target_account_id: str | None = None) -> tuple[str, None]:
+        """Allow self-service maintenance; restrict cross-account operations to AstrBot admins."""
+        operator_scope = operator_scope or scope
+        usage = ("🔧 调试命令（默认只操作自己的个人任务）\n"
                  "/打卡 调试 更名 旧名称 新名称\n"
                  "/打卡 调试 彻底删除 任务名称\n"
-                 "执行前先预览影响，确认码五分钟内有效。\n"
-                 "操作会自动备份 SQLite；备份和旧版本快照不会随彻底删除自动清除。")
+                 "更名遇到同名任务会预览合并；彻底删除会删除该任务的在线记录。\n"
+                 "所有任务变更先预览，确认码五分钟有效，执行前自动备份。")
         if not args:
-            return usage, None
+            lines = [usage]
+            if is_admin:
+                lines.extend(("/打卡 调试 用户列表 [页码]",
+                              "/打卡 调试 用户 账户ID 更名 旧名称 新名称",
+                              "/打卡 调试 用户 账户ID 彻底删除 任务名称",
+                              "/打卡 调试 删除用户 账户ID"))
+            return "\n".join(lines), None
+
+        if args[0] == "用户列表":
+            return self._debug_user_list(args[1:], is_admin)
+        if args[0] == "删除用户":
+            return self._debug_delete_user(args[1:], operator_scope, is_admin)
+        if args[0] == "用户":
+            if not is_admin:
+                raise HabitError("管理员指定其他用户需要 AstrBot 管理员权限；自己的任务可以直接调试。")
+            if len(args) < 4:
+                raise HabitError("用法：/打卡 调试 用户 账户ID 更名 旧名称 新名称；或 用户 账户ID 彻底删除 任务名称")
+            target_id = args[1].lower()
+            if not re.fullmatch(r"[a-f0-9]{32}", target_id):
+                raise HabitError("请使用 /打卡 调试 用户列表 中的完整账户 ID。")
+            with self.store._db() as conn:
+                target_id = self.store._root_locked(conn, target_id)
+                if not conn.execute("SELECT 1 FROM person_accounts WHERE id=?", (target_id,)).fetchone():
+                    raise HabitError("未找到该账户 ID。请先用 /打卡 调试 用户列表 查询。")
+            target_scope = self.store.person_scope(target_id)
+            return self._debug_command(args[2:], target_scope, True,
+                                       operator_scope=operator_scope,
+                                       target_account_id=target_id)
+
         operation = args[0]
         if operation == "更名":
             if len(args) not in (3, 5):
                 raise HabitError("用法：/打卡 调试 更名 旧名称 新名称 [确认 确认码]")
             old, new = args[1:3]
-            if new in RESERVED_COMMANDS or new in RETIRED_COMMANDS or new.isdecimal():
-                raise HabitError("新名称与系统命令冲突，请选择其他任务名称。")
+            new = validate_task_name(new)
             confirmed = len(args) == 5 and args[3] == "确认"
             if len(args) == 5 and not confirmed:
                 raise HabitError("用法：/打卡 调试 更名 旧名称 新名称 确认 确认码")
@@ -760,66 +1109,67 @@ class GroupDaka(Star):
         else:
             raise HabitError(usage)
 
+        cross_user = target_account_id is not None
+        pending_key = f"task:{scope}:{operator_scope}"
         if not confirmed:
             preview = inspect_task(self.store, scope, old, target)
-            confirm_code = secrets.token_hex(4).upper()
-            self._debug_pending[scope] = {
+            confirm_code = secrets.token_hex(6).upper()
+            self._debug_pending[pending_key] = {
                 "operation": operation, "old": preview["source"],
                 "new": target, "fingerprint": preview["fingerprint"],
                 "code": confirm_code, "expires": time.monotonic() + 300,
+                "target_account_id": target_account_id,
             }
             c = preview["counts"]
+            prefix = (f"/打卡 调试 用户 {target_account_id} " if cross_user else "/打卡 调试 ")
             intro = (f"⚠️ 调试预览：{old} → {target}\n"
-                     + ("目标名称已存在，将合并两项。"
-                        if preview["merge"] else "目标名称不存在，将直接更名。")) if target else (
-                        f"⚠️ 永久删除预览：{old}\n"
-                        "将从当前个人账户移除该任务及所有历史记录。")
+                     + ("目标名称已存在，将合并两项。" if preview["merge"]
+                        else "目标名称不存在，将直接更名。")) if target else (
+                        f"⚠️ 永久删除预览：{old}\n将删除该任务及其全部在线历史记录。")
             lines = [intro,
-                     f"当前涉及：规则 {c['habit_rules']} 条，日记录 {c['records']} 条，"
-                     f"事件 {c['checkin_events']} 条。"]
+                     f"操作对象：{'用户 '+target_account_id if cross_user else '你自己'}",
+                     f"规则 {c['habit_rules']} 条、日记录 {c['records']} 条、事件 {c['checkin_events']} 条。"]
             if preview["merge"]:
                 lines.append(f"两项同日重合：{preview['overlapping_days']} 天。")
-                lines.append("以新名称的配置为准；同日次数相加但最多计入新目标当日次数，"
-                             "全部事件时间保留。")
+                lines.append("合并后以目标任务设置为准，同日次数相加但不低于目标已有次数、最多按当日目标计分；所有原始事件时间保留。")
                 if not preview["destination_enabled"]:
-                    lines.append("注意：目标任务目前是停用状态，合并不会自动启用它。")
-            if target is None:
-                lines.append("⚠️ 会删除已停用任务和过去的打卡事件；操作无法在聊天里撤销。")
-            lines.append("执行前会自动创建 SQLite 安全备份（备份中仍保留原数据）。")
-            cmd = (f"/打卡 调试 更名 {old} {target} 确认 {confirm_code}" if target is not None
-                   else f"/打卡 调试 彻底删除 {old} 确认 {confirm_code}")
-            lines.append("请在 5 分钟内再次发送以下完整指令确认：\n" + cmd)
+                    lines.append("注意：目标任务处于停用状态，合并不会自动启用它。")
+            lines.append("执行前会自动创建 SQLite 备份；备份文件不会随删除自动清理。")
+            cmd = (f"{prefix}更名 {old} {target} 确认 {confirm_code}" if target is not None
+                   else f"{prefix}彻底删除 {old} 确认 {confirm_code}")
+            lines.append("请在 5 分钟内发送完整确认指令：\n" + cmd)
             return "\n".join(lines), None
 
-        pending = self._debug_pending.get(scope)
+        pending = self._debug_pending.get(pending_key)
         if (not pending or pending["expires"] < time.monotonic() or
             pending["operation"] != operation or pending["old"] != old or
             pending["new"] != target or
+            pending["target_account_id"] != target_account_id or
             not hmac.compare_digest(pending["code"], token.upper())):
-            raise HabitError("确认码无效、已过期或指令不匹配。请重新发送不带确认码的调试命令。")
-        # Consume the token before any destructive action; no accidental retries.
-        self._debug_pending.pop(scope, None)
+            raise HabitError("确认码无效、已过期、操作者或目标不匹配。请重新预览。")
         current = inspect_task(self.store, scope, old, target)
         if current["fingerprint"] != pending["fingerprint"]:
-            raise HabitError("任务内容在预览后发生变化，已中止，请重新预览并确认。")
+            self._debug_pending.pop(pending_key, None)
+            raise HabitError("预览后任务或记录发生变化，已中止，请重新预览。")
         backup = backup_before_edit(
             self.store.db_path,
             Path(get_astrbot_data_path()) / "backups" / "astrbot_plugin_daka" / "maintenance",
             "rename" if target is not None else "purge",
         )
+        # rename_task/purge_task recheck the fingerprint under BEGIN IMMEDIATE.
         if target is not None:
             result = rename_task(self.store, scope, old, target, pending["fingerprint"])
-            detail = ("两项已合并" if result["merge"] else "已完成更名")
+            self._debug_pending.pop(pending_key, None)
+            detail = "两项已合并" if result["merge"] else "已完成更名"
             return (f"✅ {detail}：「{old}」→「{target}」。\n"
-                    f"原任务的打卡事件 {result['counts']['checkin_events']} 条已保留。\n"
+                    f"保留原始打卡事件 {result['counts']['checkin_events']} 条。\n"
                     f"操作前备份：{backup}"), None
         result = purge_task(self.store, scope, old, pending["fingerprint"])
+        self._debug_pending.pop(pending_key, None)
         deleted = result["deleted"]
-        return (f"✅ 已彻底删除当前个人账户中的「{old}」。\n"
-                f"删除规则 {deleted['habit_rules']} 条，日记录 {deleted['records']} 条，"
-                f"打卡事件 {deleted['checkin_events']} 条。\n"
-                f"操作前备份：{backup}\n"
-                "注意：备份文件和历史数据库快照仍会保留原数据。"), None
+        return (f"✅ 已彻底删除{'用户 '+target_account_id+' 的' if cross_user else '你的'}「{old}」。\n"
+                f"删除规则 {deleted['habit_rules']} 条、日记录 {deleted['records']} 条、"
+                f"打卡事件 {deleted['checkin_events']} 条。\n操作前备份：{backup}"), None
 
     def _task_command(self, args, scope, sender, nick, is_admin, today):
         if not args or (len(args) == 1 and args[0] not in ("目标", "删除", "时间", "权重", "规则")):
@@ -852,8 +1202,7 @@ class GroupDaka(Star):
             if len(values) != 2:
                 raise HabitError("用法：/打卡 任务 目标 阅读 2")
             name, target_raw = values
-            if name in RESERVED_COMMANDS or name in RETIRED_COMMANDS or name.isdecimal():
-                raise HabitError("该名称与系统命令或编号打卡冲突，请换一个任务名称。")
+            name = validate_task_name(name)
             name = self._canonical_habit(scope, name)
             target = self._positive_int(target_raw)
             if self.store.has_history(scope, name):
@@ -972,14 +1321,15 @@ class GroupDaka(Star):
     def _dispatch(self, command: str, scope: str, sender: str, nick: str,
                   is_admin: bool, is_group: bool = True,
                   group_scope: str | None = None,
-                  account_id: str | None = None) -> tuple[str, str | None]:
+                  account_id: str | None = None,
+                  operator_scope: str | None = None) -> tuple[str, str | None]:
         parts = command.split()
         today = self._today()
         if not parts:
             return self._daily_status(scope, sender, nick, today), None
         action, *args = parts
         if action == "调试":
-            return self._debug_command(args, scope, is_admin)
+            return self._debug_command(args, scope, is_admin, operator_scope=operator_scope or scope)
         if action == "任务":
             return self._task_command(args, scope, sender, nick, is_admin, today)
         if action == "记录":

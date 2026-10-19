@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Offline source-only updater. Never invoke AstrBot's plugin uninstall API.
 
-Usage: python3 update_astrbot_daka_v1.9.1.py ./astrbot_plugin_daka_v1.9.1.zip
+Usage: python3 update_astrbot_daka_v1.9.3.py ./astrbot_plugin_daka_v1.9.3.zip
 Only Python's standard library and the already-installed Docker CLI are used.
 """
 from __future__ import annotations
@@ -20,7 +20,7 @@ import tempfile
 import zipfile
 
 NAME = 'astrbot_plugin_daka'
-VERSION = '1.9.1'
+VERSION = '1.9.3'
 
 
 def docker(*args: str) -> str:
@@ -35,22 +35,31 @@ def validate_archive(path: Path) -> list[zipfile.ZipInfo]:
         if len(entries) > 150 or sum(e.file_size for e in entries) > 16 * 1024 * 1024:
             raise ValueError('Archive exceeds safety limits.')
         seen = set()
+        forbidden_suffixes = ('.sqlite', '.sqlite3', '.db', '.wal', '.shm', '.pyc', '.pyo')
         for entry in entries:
-            p = PurePosixPath(entry.filename)
-            if (p.is_absolute() or '..' in p.parts or '\\' in entry.filename or
-                    not p.parts or p.parts[0] != NAME or entry.filename in seen):
-                raise ValueError('Unsafe/duplicate archive path: ' + entry.filename)
-            if stat.S_ISLNK(entry.external_attr >> 16):
-                raise ValueError('Symlinks are not permitted in this update.')
-            seen.add(entry.filename)
+            raw = entry.filename
+            p = PurePosixPath(raw)
+            is_dir = entry.is_dir()
+            normalized = p.as_posix()
+            canonical = normalized + ('/' if is_dir else '')
+            if (p.is_absolute() or '..' in p.parts or '.' in p.parts or
+                    '\\' in raw or not p.parts or p.parts[0] != NAME or
+                    raw != canonical or normalized in seen or
+                    any(part.startswith('.') for part in p.parts) or
+                    Path(p.name).suffix.lower() in forbidden_suffixes):
+                raise ValueError('Unsafe/non-canonical/duplicate archive path: ' + raw)
+            mode = stat.S_IFMT(entry.external_attr >> 16)
+            if stat.S_ISLNK(entry.external_attr >> 16) or mode not in (0, stat.S_IFREG, stat.S_IFDIR):
+                raise ValueError('Symlinks and special files are not permitted in this update.')
+            seen.add(normalized)
         required = {f'{NAME}/{name}' for name in
                     ('main.py','accounts.py','store.py','qq_transport.py','metadata.yaml',
-                     'scoring.py','scored_store.py','panel.py','weighted_calendar.py','daily_image.py','task_colors.py','help_content.py','help_image.py','task_maintenance.py')}
+                     'scoring.py','scored_store.py','panel.py','weighted_calendar.py','daily_image.py','task_colors.py','help_content.py','help_image.py','task_maintenance.py','command_names.py','migrate_defaults_v193.py')}
         if not required <= seen:
             raise ValueError('Required plugin files are missing.')
         metadata = archive.read(f'{NAME}/metadata.yaml').decode('utf-8')
-        if not re.search(r'^version:\s*1\.9\.1\s*$', metadata, re.M):
-            raise ValueError('This updater only installs version 1.9.1.')
+        if not re.search(r'^version:\s*1\.9\.3\s*$', metadata, re.M):
+            raise ValueError('This updater only installs version 1.9.3.')
         if not re.search(r'^name:\s*astrbot_plugin_daka\s*$', metadata, re.M):
             raise ValueError('Plugin name mismatch.')
         broken = archive.testzip()
@@ -64,6 +73,8 @@ def update(zip_path: Path, root: Path, container: str = 'astrbot', check_only=Fa
     root = root.resolve(strict=True)
     validate_archive(zip_path)
     data = root / 'data'
+    if data.is_symlink() or not data.is_dir():
+        raise RuntimeError('Expected a real --root/data directory. Aborting.')
     info = json.loads(docker('inspect', container))[0]
     mounts = [m for m in info.get('Mounts', []) if m.get('Destination') == '/AstrBot/data']
     if (len(mounts) != 1 or mounts[0].get('Type') != 'bind' or
@@ -75,6 +86,10 @@ def update(zip_path: Path, root: Path, container: str = 'astrbot', check_only=Fa
         raise RuntimeError('Unexpected plugin directory symlink. Manual review required.')
     if target.exists() and not target.is_dir():
         raise RuntimeError('Plugin path is not a directory.')
+    plugin_data_root = data / 'plugin_data'
+    plugin_data = plugin_data_root / NAME
+    if plugin_data_root.is_symlink() or plugin_data.is_symlink():
+        raise RuntimeError('Unexpected plugin_data symlink. Manual review required.')
     if not info.get('State', {}).get('Running'):
         raise RuntimeError('AstrBot is not currently running. Start/check it first; no files changed.')
     digest = hashlib.sha256(zip_path.read_bytes()).hexdigest()

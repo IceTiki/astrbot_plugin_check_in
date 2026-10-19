@@ -17,12 +17,14 @@ from pathlib import Path
 
 
 DEFAULT_HABITS = (
-    ("早睡", 1),
-    ("早起", 1),
+    ("睡觉", 1),
+    ("起床", 1),
     ("早餐", 1),
     ("午餐", 1),
     ("晚餐", 1),
-    ("喝水", 8),
+    ("运动", 1),
+    ("规划待办", 1),
+    ("完成待办", 1),
 )
 
 NAME_PATTERN = re.compile(r"^[\w\u4e00-\u9fff-]{1,16}$", re.UNICODE)

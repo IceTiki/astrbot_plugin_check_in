@@ -1,4 +1,4 @@
-"""Administrator-only per-person task maintenance.
+"""Per-person task maintenance; authorization is enforced by the command handler.
 
 Every change uses one SQLite transaction and checks a preview fingerprint.
 No other accounts, group data, or historical identity imports are modified.
@@ -9,18 +9,20 @@ from datetime import datetime
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import secrets
 import sqlite3
 
 from .store import HabitError, validate_name
+from .command_names import validate_task_name
 
 TABLES = ("habits", "habit_rules", "records", "checkin_events")
 
 
 def _check_scope(scope: str):
-    if not scope.startswith("person:") or len(scope) <= len("person:"):
-        raise HabitError("调试操作只能处理当前个人账户的任务。")
+    if not re.fullmatch(r"person:[a-f0-9]{32}", scope):
+        raise HabitError("调试操作只能处理有效的个人账户任务。")
 
 
 def _task_row(conn, scope, name):
@@ -78,7 +80,7 @@ def inspect_task(store, scope: str, old: str, new: str | None = None) -> dict:
     _check_scope(scope)
     old = validate_name(old)
     if new is not None:
-        new = validate_name(new)
+        new = validate_task_name(new)
         if old == new:
             raise HabitError("新旧任务名称不能相同。")
     store.ensure_rules(scope)
@@ -112,7 +114,7 @@ def rename_task(store, scope: str, old: str, new: str, expected: str) -> dict:
     event timestamps survive unmodified.
     """
     _check_scope(scope)
-    old, new = validate_name(old), validate_name(new)
+    old, new = validate_name(old), validate_task_name(new)
     if old == new:
         raise HabitError("新旧任务名称不能相同。")
     with store._db() as conn:

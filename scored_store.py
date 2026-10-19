@@ -170,9 +170,9 @@ class ScoredStore(AccountCheckinStore):
             if water and water["created_by"] == "__system__":
                 r = self._rule_locked(conn, scope, "\u559d\u6c34", cutover, allow_disabled=True)
                 self._write_locked(conn, scope, dict(r, enabled=0), cutover)
-            # Custom tasks follow the seven defaults, without resetting targets.
+            # Custom tasks follow all default tasks, without resetting their targets.
             defaults = {x[0] for x in DEFAULT_RULES}
-            order = 7
+            order = len(DEFAULT_RULES)
             for r in self._rules_locked(conn, scope, cutover, include_disabled=True):
                 if r["name"] not in defaults:
                     self._write_locked(conn, scope, dict(r, sort_order=order), cutover)
@@ -252,10 +252,12 @@ class ScoredStore(AccountCheckinStore):
         name = validate_name(name)
         super().add_habit(scope, name, target, user_id, cap)
         with self._db() as conn:
-            order = conn.execute("SELECT COALESCE(MAX(sort_order),6)+1 FROM habit_rules WHERE scope=?",
-                                 (scope,)).fetchone()[0]
+            order = conn.execute(
+                "SELECT COALESCE(MAX(sort_order),?)+1 FROM habit_rules WHERE scope=?",
+                (len(DEFAULT_RULES)-1, scope),
+            ).fetchone()[0]
             self._write_locked(conn, scope, {"name": name, "target": target, "weight": 1.0,
-                               "best_time": None, "delay_minutes": 30, "enabled": 1,
+                               "best_time": None, "delay_minutes": 60, "enabled": 1,
                                "sort_order": order, "model": "half_life"}, self.today())
 
     def delete_habit(self, scope, name, user_id, is_admin):
