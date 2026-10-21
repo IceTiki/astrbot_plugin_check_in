@@ -18,10 +18,28 @@ MUTED = "#B8B8B8"
 FAINT = "#85878C"
 BLUE = "#2D89EF"
 BAR_BG = "#45474D"
+MARKER_EMPTY_BG = "#202329"
+MARKER_EMPTY_OUTLINE = "#A9B1BC"
+MARKER_FAINT_BG = "#36383D"
+MARKER_FAINT_OUTLINE = "#4B4E55"
+
+
+def _clamp_ratio(value):
+    """Normalize untrusted score values before using them in layout math."""
+    if value is None:
+        return None
+    try:
+        ratio = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not math.isfinite(ratio):
+        return None
+    return max(0.0, min(1.0, ratio))
 
 
 def color_for(ratio):
     """Return neutral Metro colors for the score bar, not task identity."""
+    ratio = _clamp_ratio(ratio)
     if ratio is None:
         return BAR_BG, FAINT, "#4A4C52"
     if ratio >= 1 - 1e-10:
@@ -36,6 +54,7 @@ def color_for(ratio):
 
 
 def emoji_for(ratio):
+    ratio = _clamp_ratio(ratio)
     if ratio is None:
         return "\u00b7"
     if ratio >= 1 - 1e-10:
@@ -96,21 +115,33 @@ def _task_names(metrics):
 
 
 def _draw_task_marker(draw, box, item, name, index, future):
+    """Fill a task marker by earned score, not by raw check-in count.
+
+    A completed but late task may earn less than 100%, so its marker must still
+    be partial. Empty markers use a strong neutral outline; inactive/future
+    markers are deliberately low-contrast and carry a small dash.
+    """
     x0, y0, x1, y1 = box
     color = task_color(name, index)
     if future or item is None:
-        draw.rounded_rectangle(box, radius=2, fill="#36383D", outline="#4B4E55", width=1)
+        draw.rounded_rectangle(box, radius=3, fill=MARKER_FAINT_BG,
+                               outline=MARKER_FAINT_OUTLINE, width=1)
+        mid_y = (y0 + y1) // 2
+        draw.line((x0 + 4, mid_y, x1 - 4, mid_y), fill="#5C5F66", width=1)
         return
-    amount = max(0, int(item.get("amount", 0)))
-    target = max(1, int(item.get("target", 1)))
-    if amount >= target:
-        draw.rounded_rectangle(box, radius=2, fill=color)
-    elif amount > 0:
-        draw.rounded_rectangle(box, radius=2, fill="#3B3D42", outline=color, width=1)
-        width = max(1, round((x1 - x0) * min(1.0, amount / target)))
-        draw.rectangle((x0, y0 + 1, min(x1 - 1, x0 + width), y1 - 1), fill=color)
+
+    score = _clamp_ratio(item.get("score", 0.0)) or 0.0
+    if score >= 1 - 1e-10:
+        draw.rounded_rectangle(box, radius=3, fill=color, outline=color, width=1)
+    elif score > 0:
+        draw.rounded_rectangle(box, radius=3, fill=MARKER_EMPTY_BG,
+                               outline=color, width=2)
+        inner_width = x1 - x0 - 3
+        fill_width = max(1, min(inner_width, round(inner_width * score)))
+        draw.rectangle((x0 + 2, y0 + 2, x0 + 1 + fill_width, y1 - 2), fill=color)
     else:
-        draw.rounded_rectangle(box, radius=2, fill="#3B3D42", outline="#55585E", width=1)
+        draw.rounded_rectangle(box, radius=3, fill=MARKER_EMPTY_BG,
+                               outline=MARKER_EMPTY_OUTLINE, width=2)
 
 
 def render_weighted(out_path: Path, year: int, month: int, metrics: dict,
@@ -121,13 +152,21 @@ def render_weighted(out_path: Path, year: int, month: int, metrics: dict,
     weeks = calendar.Calendar(firstweekday=0).monthdayscalendar(year, month)
     cn = _supports_chinese()
     names = _task_names(metrics)
-    marker_cols = min(8, max(1, len(names)))
-    marker_size = 10 if len(names) <= 8 else 7
-    marker_gap = 3 if len(names) <= 8 else 2
+    # Four columns make the default eight tasks render as two larger rows.
+    # Scale down only for unusually large custom task lists.
+    marker_cols = min(4, max(1, len(names)))
+    if len(names) <= 8:
+        marker_size, marker_gap = 15, 5
+    elif len(names) <= 16:
+        marker_size, marker_gap = 13, 4
+    elif len(names) <= 32:
+        marker_size, marker_gap = 10, 3
+    else:
+        marker_size, marker_gap = 8, 2
     marker_rows = max(1, math.ceil(len(names) / marker_cols))
-    cell_height = max(110, 50 + marker_rows * (marker_size + marker_gap) + 24)
+    cell_height = max(120, 51 + marker_rows * (marker_size + marker_gap) + 26)
     cell_width, x_step, y_step = 128, 141, cell_height + 14
-    width, x0, y0 = 1080, 52, 302
+    width, x0, y0 = 1080, 52, 314
 
     task_legend_count = min(14, len(names))
     task_legend_rows = math.ceil(task_legend_count / 7) if task_legend_count else 0
@@ -152,16 +191,30 @@ def render_weighted(out_path: Path, year: int, month: int, metrics: dict,
         (716, "\u6ee1\u5206\u65e5 / \u8ba1\u5206\u65e5" if cn else "FULL / TRACKED DAYS",
          f"{stats['full_days']} / {stats['days']}")]
     for x, label, value in summary_cards:
-        draw.rounded_rectangle((x, 154, x + 308, 244), radius=12, fill="#34363B")
-        _text(draw, (x + 18, 166), label, 15, MUTED)
-        size = 27
-        while size > 15 and draw.textbbox((0, 0), value, font=_font(size))[2] > 270:
+        draw.rounded_rectangle((x, 154, x + 308, 264), radius=12, fill="#34363B")
+        _text(draw, (x + 18, 164), label, 15, MUTED)
+        is_month_score = x == 56
+        size = 40 if is_month_score else 27
+        while size > (22 if is_month_score else 15) and draw.textbbox((0, 0), value, font=_font(size))[2] > 270:
             size -= 1
-        _text(draw, (x + 18, 198), value, size, BLUE if x == 56 else INK)
+        _text(draw, (x + 18, 188 if is_month_score else 198), value, size,
+              BLUE if is_month_score else INK)
+        if is_month_score:
+            # A thick, high-contrast monthly progress bar accompanies the larger percentage.
+            bar_x0, bar_x1 = x + 18, x + 290
+            bar_y0, bar_y1 = 242, 251
+            draw.rounded_rectangle((bar_x0, bar_y0, bar_x1, bar_y1), radius=4, fill=BAR_BG)
+            ratio = _clamp_ratio(stats.get("ratio"))
+            if ratio is not None and ratio > 0:
+                bar_width = bar_x1 - bar_x0 + 1
+                fill_width = max(2, round(bar_width * ratio))
+                draw.rounded_rectangle((bar_x0, bar_y0,
+                                        min(bar_x1, bar_x0 + fill_width - 1), bar_y1),
+                                       radius=4, fill=BLUE)
 
     weekdays = ("\u5468\u4e00", "\u5468\u4e8c", "\u5468\u4e09", "\u5468\u56db", "\u5468\u4e94", "\u5468\u516d", "\u5468\u65e5") if cn else ("MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN")
     for col, weekday in enumerate(weekdays):
-        _text(draw, (x0 + col * x_step + cell_width // 2, 269), weekday, 16, MUTED, "mt")
+        _text(draw, (x0 + col * x_step + cell_width // 2, 282), weekday, 16, MUTED, "mt")
 
     for row, week in enumerate(weeks):
         for col, number in enumerate(week):
@@ -170,8 +223,8 @@ def render_weighted(out_path: Path, year: int, month: int, metrics: dict,
             x, y = x0 + col * x_step, y0 + row * y_step
             future = date(year, month, number) > today
             metric = metrics.get(number)
-            ratio = metric.get("display_ratio", metric.get("ratio")) if metric else None
-            fill, score_color, stroke = color_for(ratio)
+            ratio = _clamp_ratio(metric.get("display_ratio", metric.get("ratio"))) if metric else None
+            _, score_color, _ = color_for(ratio)
             is_today = date(year, month, number) == today
             draw.rounded_rectangle((x, y, x + cell_width, y + cell_height), radius=10,
                                    fill=CELL, outline=BLUE if is_today else "#44474D",
@@ -198,16 +251,18 @@ def render_weighted(out_path: Path, year: int, month: int, metrics: dict,
                 marker_row, marker_col = divmod(index, marker_cols)
                 mx = marker_x0 + marker_col * (marker_size + marker_gap)
                 my = marker_y0 + marker_row * (marker_size + marker_gap)
-                _draw_task_marker(draw, (mx, my, mx + marker_size, my + marker_size),
+                _draw_task_marker(draw, (mx, my, mx + marker_size - 1, my + marker_size - 1),
                                  by_name.get(name), name, index, future)
 
             bar_y = y + cell_height - 10
             bar_x0, bar_x1 = x + 10, x + cell_width - 10
-            draw.rounded_rectangle((bar_x0, bar_y, bar_x1, bar_y + 3), radius=1, fill=BAR_BG)
+            draw.rounded_rectangle((bar_x0, bar_y, bar_x1, bar_y + 5), radius=3, fill=BAR_BG)
             if ratio is not None and not future and ratio > 0:
+                bar_width = bar_x1 - bar_x0 + 1
+                fill_width = max(2, round(bar_width * ratio))
                 draw.rounded_rectangle((bar_x0, bar_y,
-                                        min(bar_x1, bar_x0 + max(2, round((bar_x1 - bar_x0) * ratio))),
-                                        bar_y + 3), radius=1, fill=BLUE)
+                                        min(bar_x1, bar_x0 + fill_width - 1),
+                                        bar_y + 5), radius=3, fill=BLUE)
 
     if task_legend_count:
         for index, name in enumerate(names[:14]):
@@ -226,24 +281,27 @@ def render_weighted(out_path: Path, year: int, month: int, metrics: dict,
         _text(draw, (56, status_y - 12), _fit(draw, more, 13, 960), 13, FAINT)
 
     status_entries = [
-        ("\u5b9e\u5fc3=\u5b8c\u6210" if cn else "SOLID = DONE", 0),
-        ("\u534a\u586b=\u90e8\u5206" if cn else "PARTIAL FILL", 1),
-        ("\u7a7a\u6846=\u672a\u5b8c\u6210" if cn else "EMPTY = NOT DONE", 2),
-        ("\u6de1\u6846=\u672a\u542f\u7528/\u672a\u6765" if cn else "FAINT = INACTIVE/FUTURE", 3),
+        ("\u5b9e\u5fc3=100%\u5f97\u5206" if cn else "SOLID = 100% SCORE", 0),
+        ("\u586b\u5145\u6bd4\u4f8b=\u4efb\u52a1\u5f97\u5206%" if cn else "FILL = TASK SCORE %", 1),
+        ("\u7a7a\u6846=0\u5206/\u672a\u5b8c\u6210" if cn else "EMPTY = ZERO SCORE", 2),
+        ("\u6de1\u6846=\u505c\u7528/\u672a\u6765" if cn else "FAINT = INACTIVE/FUTURE", 3),
     ]
     for index, (label, state) in enumerate(status_entries):
         sx = 56 + index * 241
         sy = status_y + 5
         sample = (sx, sy, sx + 13, sy + 13)
         if state == 0:
-            draw.rounded_rectangle(sample, radius=2, fill="#B8B8B8")
+            draw.rounded_rectangle(sample, radius=3, fill="#8E44AD", outline="#8E44AD", width=1)
         elif state == 1:
-            draw.rounded_rectangle(sample, radius=2, fill="#3B3D42", outline="#8E44AD", width=1)
-            draw.rectangle((sx + 1, sy + 2, sx + 6, sy + 11), fill="#8E44AD")
+            draw.rounded_rectangle(sample, radius=3, fill=MARKER_EMPTY_BG, outline="#8E44AD", width=1)
+            draw.rectangle((sx + 2, sy + 2, sx + 6, sy + 11), fill="#8E44AD")
         elif state == 2:
-            draw.rounded_rectangle(sample, radius=2, fill="#3B3D42", outline="#55585E", width=1)
+            draw.rounded_rectangle(sample, radius=3, fill=MARKER_EMPTY_BG,
+                                   outline=MARKER_EMPTY_OUTLINE, width=2)
         else:
-            draw.rounded_rectangle(sample, radius=2, fill="#36383D", outline="#4B4E55", width=1)
+            draw.rounded_rectangle(sample, radius=3, fill=MARKER_FAINT_BG,
+                                   outline=MARKER_FAINT_OUTLINE, width=1)
+            draw.line((sx + 4, sy + 7, sx + 9, sy + 7), fill="#5C5F66", width=1)
         _text(draw, (sx + 20, sy - 1), label, 13, MUTED)
     note = "\u8272\u5757\u987a\u5e8f=\u4efb\u52a1\u5217\u8868" if cn else "MARKER ORDER = TASK LIST"
     _text(draw, (width - 56, status_y + 28), note, 11, FAINT, "rt")

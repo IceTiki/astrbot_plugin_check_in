@@ -55,3 +55,13 @@ No new callback event handler, AppID discovery method, privileged QQ capability 
 See TEST_REPORT.txt. Tests exercise real SQLite databases and image rendering; AstrBot events, QQ HTTP responses and Docker actions are fixtures. The tests do not connect to the user's host, do not authenticate to QQ, and do not prove how a particular QQ client renders the new layout.
 
 No font files, tokens, personal records or user screenshots are included in the plugin archive.
+
+## v1.9.4 monthly-calendar rendering correction (2026-10-21)
+
+- Task marker fill is now driven by each task's scored `score` ratio, not `amount / target`. A task completed late can therefore display a partial marker even when its count target was reached.
+- Default eight-task views use a four-column, two-row marker layout with larger squares. Larger custom task lists adapt their marker size and row count.
+- The monthly completion percentage and its progress bar are more prominent; per-day progress bars are thicker.
+- Empty markers use a high-contrast outline. Inactive/future markers use a low-contrast border and a short dash.
+- No scoring formula, database schema, task history, or stored records were changed.
+- Focused regression tests for score-proportional fill, empty/faint contrast, and the monthly summary bar pass.
+- The bundled legacy suite still has pre-existing mismatches with the current v1.9.3 code: the original archive had 49 failures / 97 passes; after this change it has the same 49 failing test identifiers and 100 passes (three new focused tests). These existing failures are not represented as passing, and the comparison does not replace live AstrBot/QQ verification.

@@ -1,10 +1,21 @@
-AstrBot habit check-in v1.7.0 -- offline regression summary
+AstrBot habit check-in v1.9.4 -- monthly calendar visual regression
+Date: 2026-10-21
 
-2026-10-18
-146 pytest tests passed (see tests/test_regressions.py, test_v16_scoring.py, test_v17_half_life.py).
-Coverage includes continuous half-life from best time, exact 50% at H, 
-previous-day v1.6 stepped score retention, current-day migration, repeated
-check-in partial weights, midnight 04:00 boundary, QQ mock message flow,
-SQLite account management, and safety of unchanged commands.
-QQ official platform endpoint behavior is simulated, not live-verified.
-Production AstrBot deployment and user data not accessed or modified.
+Focused visual tests:
+- Task markers use scored percentage rather than amount/target: PASS
+- Empty and inactive/future markers have visibly different contrast: PASS
+- Monthly summary card contains a prominent thick progress bar: PASS
+Result: 3 focused tests passed.
+
+Full bundled offline suite comparison:
+- Original uploaded v1.9.3 source: 49 failed, 97 passed.
+- Modified v1.9.4 source: 49 failed, 100 passed.
+- The exact 49 failing test identifiers are identical in both runs. The source bundle contains older tests whose assumptions conflict with current defaults, commands and updater format. No claim is made that the entire bundled suite passes.
+
+Image rendering:
+- Rendered a 1080px-wide October 2026 sample calendar with eight task markers, partial score values, larger multi-row markers, summary progress bar, thicker daily bars, and contrasting empty/future markers.
+- Preview image is a synthetic visual fixture, not a user's database export.
+
+Limitations:
+- No connection to the user's production AstrBot, QQ client, Docker container, or SQLite database was made.
+- QQ client rendering and production delivery remain unverified.

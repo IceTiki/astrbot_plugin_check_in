@@ -1,4 +1,13 @@
-# AstrBot 习惯打卡 v1.9.3
+# AstrBot 习惯打卡 v1.9.4
+
+## v1.9.4 修复 · 月历得分可视化
+
+- 每个任务格的填充比例现在按该任务的实际得分百分比绘制，而不是只看打卡次数是否达到目标；按时满分实心，迟到扣分会显示为对应比例的半填。
+- 默认八项任务改为四列两行，方块更大；自定义任务较多时自动调整行数和方块尺寸。
+- 本月完成度百分比更醒目，并增加更粗的总进度条；每日进度条也加粗。
+- 空框使用高对比边框，停用／未来任务使用低对比淡框和短横线，便于区分。
+- 本次只修改月历可视化，不改变计分规则、数据库结构或历史记录。
+
 
 基于 v1.9.1 更新默认任务模板、调试权限和管理员用户管理；保留统一命令体系和 Metro 图片帮助。**数据库保持 SQLite，无需重置账户或历史打卡数据。**
 
@@ -42,7 +51,7 @@
 
 以下内容与插件执行 `/打卡 帮助` 的文字回退相同。所有示例中的任务名、时间和日期可替换；方括号表示可选。
 
-🌱 打卡命令大全 · v1.9.3
+🌱 打卡命令大全 · v1.9.4
 每次打卡仅增加 1 次；每日 04:00 换日。
 
 【日常打卡】
@@ -202,8 +211,8 @@
 
 ```bash
 cd /opt/services/astrbot
-python3 update_astrbot_daka_v1.9.3.py astrbot_plugin_daka_v1.9.3.zip --check-only
-python3 update_astrbot_daka_v1.9.3.py astrbot_plugin_daka_v1.9.3.zip
+python3 astrbot_plugin_daka/update_source.py astrbot_plugin_daka_v1.9.4.zip --check-only
+python3 astrbot_plugin_daka/update_source.py astrbot_plugin_daka_v1.9.4.zip
 docker logs --since 3m --tail=150 astrbot
 ```
 
@@ -229,14 +238,14 @@ docker logs --since 3m --tail=150 astrbot
 
 ## 旧用户一次性默认任务迁移（Debian）
 
-插件升级后，新注册账户使用 v1.9.3 的新默认模板。若要把旧账户也统一成新模板，请在 Debian 上先执行只读预览，再显式执行迁移脚本。脚本会删除所有 scope 中「工作一小时」的任务、规则、每日记录和事件；其他任务的历史记录会保留。八个新默认任务的目标、时间、权重、启用状态和排序从当前业务日统一生效；自定义任务的目标、权重、时间和启用状态保留，只将排序放到默认任务之后。旧版「早睡／早起」若能无冲突改名会转为「睡觉／起床」；若两种名称都已有数据，则旧名称保留为停用任务，避免覆盖历史。
+插件升级后，新注册账户使用 v1.9.4 的新默认模板。若要把旧账户也统一成新模板，请在 Debian 上先执行只读预览，再显式执行迁移脚本。脚本会删除所有 scope 中「工作一小时」的任务、规则、每日记录和事件；其他任务的历史记录会保留。八个新默认任务的目标、时间、权重、启用状态和排序从当前业务日统一生效；自定义任务的目标、权重、时间和启用状态保留，只将排序放到默认任务之后。旧版「早睡／早起」若能无冲突改名会转为「睡觉／起床」；若两种名称都已有数据，则旧名称保留为停用任务，避免覆盖历史。
 
 ```bash
 # 先预览，不改数据库
-python3 migrate_daka_defaults_v1.9.3.py --db /opt/services/astrbot/data/plugin_data/astrbot_plugin_daka/checkin.sqlite3
+python3 astrbot_plugin_daka/migrate_defaults_v193.py --db /opt/services/astrbot/data/plugin_data/astrbot_plugin_daka/checkin.sqlite3
 
 # 确认路径和预计删除内容后才实际执行
-python3 migrate_daka_defaults_v1.9.3.py --db /opt/services/astrbot/data/plugin_data/astrbot_plugin_daka/checkin.sqlite3 --apply
+python3 astrbot_plugin_daka/migrate_defaults_v193.py --db /opt/services/astrbot/data/plugin_data/astrbot_plugin_daka/checkin.sqlite3 --apply
 
 docker restart astrbot
 ```

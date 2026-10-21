@@ -10,7 +10,7 @@ import sqlite3
 import zipfile
 
 import pytest
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from test_regressions import (plugin, Event, FakeHTTP, AccountCheckinStore,
                               resolve, DM, GROUP, UID, D, TZ)
@@ -19,7 +19,11 @@ from astrbot_plugin_daka.scoring import (DEFAULT_RULES, business_day, at_clock, 
     fmt_percent, parse_backfill_time)
 from astrbot_plugin_daka.scored_store import ScoredStore
 from astrbot_plugin_daka.store import HabitError
-from astrbot_plugin_daka.weighted_calendar import render_weighted, weighted_text
+from astrbot_plugin_daka.weighted_calendar import (
+    render_weighted, weighted_text, _draw_task_marker,
+    MARKER_EMPTY_BG, MARKER_EMPTY_OUTLINE, MARKER_FAINT_OUTLINE, BLUE, BAR_BG,
+)
+from astrbot_plugin_daka.task_colors import task_color
 from astrbot_plugin_daka.panel import daily_panel
 
 Z = ZoneInfo('Asia/Shanghai')
@@ -431,8 +435,43 @@ def test_images_contain_weighted_metrics_and_handle_six_rows(system,tmp_path):
     text=weighted_text(2026,10,days,stats,D)
     assert '4.8%' in text and '0.33/7' in text
     p=render_weighted(tmp_path/'six.png',2026,8,{},dict(weight=0,earned=0,ratio=None,days=0,full_days=0),date(2026,8,31),'test')
-    assert Image.open(p).height==1132
+    assert Image.open(p).height==1204
 
+
+
+def _rgb(hex_color):
+    return tuple(int(hex_color[i:i+2], 16) for i in (1, 3, 5))
+
+
+def test_calendar_task_marker_fill_uses_score_not_checkin_count():
+    image = Image.new('RGB', (64, 24), '#000000')
+    draw = ImageDraw.Draw(image)
+    # The task reached its count target, but half-life scoring only awarded 40%.
+    _draw_task_marker(draw, (2, 3, 17, 18),
+                      {'amount': 1, 'target': 1, 'progress': 1.0, 'score': 0.4},
+                      SLEEP, 0, False)
+    color = _rgb(task_color(SLEEP, 0))
+    assert image.getpixel((7, 10)) == color
+    assert image.getpixel((13, 10)) == _rgb(MARKER_EMPTY_BG)
+
+
+def test_calendar_empty_and_faint_markers_have_distinct_contrast():
+    image = Image.new('RGB', (64, 24), '#000000')
+    draw = ImageDraw.Draw(image)
+    _draw_task_marker(draw, (2, 3, 17, 18),
+                      {'amount': 0, 'target': 1, 'score': 0.0}, SLEEP, 0, False)
+    _draw_task_marker(draw, (24, 3, 39, 18), None, SLEEP, 0, True)
+    assert image.getpixel((10, 3)) == _rgb(MARKER_EMPTY_OUTLINE)
+    assert image.getpixel((31, 3)) == _rgb(MARKER_FAINT_OUTLINE)
+
+
+def test_calendar_month_summary_has_a_thick_score_progress_bar(tmp_path):
+    stats = {'weight': 1, 'earned': 0.5, 'ratio': 0.5, 'days': 1, 'full_days': 0}
+    path = render_weighted(tmp_path / 'summary-bar.png', 2026, 10, {}, stats,
+                           date(2026, 10, 1), 'test')
+    image = Image.open(path).convert('RGB')
+    assert image.getpixel((80, 246)) == _rgb(BLUE)
+    assert image.getpixel((300, 246)) == _rgb(BAR_BG)
 
 def test_complete_but_penalized_panel_does_not_claim_perfect(system):
     db,scope,_=system
