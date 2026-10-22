@@ -104,14 +104,22 @@ def _fit(draw, value, size, limit):
     return value
 
 
-def _task_names(metrics):
-    names = []
+def _task_names(metrics, current_order=None):
+    """Show month markers in the person's CURRENT configured task order.
+
+    Names no longer configured (e.g. renamed old tasks) still appear after
+    current tasks when historical metrics contain them. No markers are invented.
+    """
+    present = set()
+    first_seen = []
     for day in sorted(metrics):
         for item in metrics[day].get("items", []):
             name = str(item.get("name", ""))
-            if name and name not in names:
-                names.append(name)
-    return names
+            if name and name not in present:
+                present.add(name)
+                first_seen.append(name)
+    preferred = [name for name in (current_order or []) if name in present]
+    return preferred + [name for name in first_seen if name not in preferred]
 
 
 def _draw_task_marker(draw, box, item, name, index, future):
@@ -145,13 +153,14 @@ def _draw_task_marker(draw, box, item, name, index, future):
 
 
 def render_weighted(out_path: Path, year: int, month: int, metrics: dict,
-                    stats: dict, today: date, member_name: str, chosen=None):
+                    stats: dict, today: date, member_name: str, chosen=None,
+                    task_order=None):
     """Render the month score and a fixed-color status marker for each task/day."""
     if Image is None:
         return None
     weeks = calendar.Calendar(firstweekday=0).monthdayscalendar(year, month)
     cn = _supports_chinese()
-    names = _task_names(metrics)
+    names = _task_names(metrics, task_order)
     # Four columns make the default eight tasks render as two larger rows.
     # Scale down only for unusually large custom task lists.
     marker_cols = min(4, max(1, len(names)))

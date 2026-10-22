@@ -74,23 +74,28 @@ def test_naive_business_day_rejected():
     with pytest.raises(HabitError): business_day(datetime(2026,10,17))
 
 
-@pytest.mark.parametrize('when,factor', [
-    (dt(17,21),1), (dt(17,23,30),1), (dt(17,23,59,59),1),
-    (dt(18,0,0,0),1), (dt(18,0,0,1),.5), (dt(18,0,15),.5),
-    (dt(18,0,30,0),.5), (dt(18,0,30,1),.25), (dt(18,1,0),.25),
-    (dt(18,1,0,1),.125),
+@pytest.mark.parametrize('when', [
+    dt(17,21), dt(17,23,30), dt(17,23,59,59),
+    dt(18,0,0,0), dt(18,0,0,1), dt(18,0,15),
+    dt(18,0,30,0), dt(18,0,30,1), dt(18,1,0), dt(18,1,0,1),
 ])
-def test_v16_old_step_delay_inclusive_boundaries(when,factor):
-    assert late_factor(D,'23:30',30,when,Z,model='weighted')==factor
+def test_v16_weighted_flag_is_ignored_for_unified_formula(when):
+    minutes=max(0,(when-at_clock(D,'23:30',Z)).total_seconds()/60)
+    x=minutes/30
+    expected=(1+math.log(2)*x)*2**(-x)
+    assert late_factor(D,'23:30',30,when,Z,model='weighted')==pytest.approx(expected)
 
 
-@pytest.mark.parametrize('clock,when,factor', [
-    ('08:00',dt(17,7),1),('08:00',dt(17,8,30),1),
-    ('08:00',dt(17,8,30,1),.5),('08:00',dt(17,9,0,1),.25),
-    ('00:00',dt(18,0,30),1),('00:00',dt(18,0,30,1),.5),
+@pytest.mark.parametrize('clock,when', [
+    ('08:00',dt(17,7)),('08:00',dt(17,8,30)),
+    ('08:00',dt(17,8,30,1)),('08:00',dt(17,9,0,1)),
+    ('00:00',dt(18,0,30)),('00:00',dt(18,0,30,1)),
 ])
-def test_v16_old_step_other_targets_and_midnight_anchor(clock,when,factor):
-    assert late_factor(D,clock,30,when,Z,model='weighted')==factor
+def test_v16_other_targets_use_unified_curve(clock,when):
+    minutes=max(0,(when-at_clock(D,clock,Z)).total_seconds()/60)
+    x=minutes/30
+    expected=(1+math.log(2)*x)*2**(-x)
+    assert late_factor(D,clock,30,when,Z,model='weighted')==pytest.approx(expected)
 
 
 def test_before_four_clock_is_next_day():

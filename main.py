@@ -44,7 +44,7 @@ PERSONAL_PREF_ORIGIN = "__person__"
 from .command_names import RESERVED_COMMANDS, RETIRED_COMMANDS, validate_task_name
 
 
-RULE_HELP = """📐 温和衰减计分（v1.9.5）
+RULE_HELP = """📐 统一温和衰减计分（v1.9.6）
 打卡日：04:00 至次日 03:59:59（配置时区）。
 提前或准时：100%；超出最佳时间后逐渐下降，无额外宽限期。
 迟到分钟 t = max(0, 实际完成时间 - 最佳时间)，H 为衰减尺度（分钟）。
@@ -55,8 +55,8 @@ H 不再是严格意义上的半衰期：晚 H 得84.7%，晚2H得59.7%，晚3H�
 每日完成度 = 当天累计得分 / 当天有效权重；月完成度按计分日期累计。
 多次任务各次独立计分；权重为0可记录但不影响总分。
 任务达标后额外打卡不增加次数、不覆盖完成时间。
-新公式从首次使用 v1.9.5 的打卡日起生效；之前已结束的日期仍按旧规则计分。
-旧版连续半衰期规则 f(t)=2^(-t/H) 仅用于旧日期，v1.6历史沿用原阶梯式扣分。
+从 v1.9.6 起，过去与未来的所有日期均按同一公式实时重算；不会保留旧计分公式。
+历史打卡事件、时间、每天的任务目标、权重及最佳时间均保持不变；时间未知不追溯扣分。
 旧数据库字段仍叫 delay_minutes；设置时请用统一命令 /打卡 任务 时间，不再使用旧独立命令。
 命令：/打卡 任务 时间 睡觉 23:30 60；/打卡 任务 权重 阅读 0。
 此功能只记录自报完成时间，不验证真实睡眠或工作。"""
@@ -102,27 +102,20 @@ class GroupDaka(Star):
                     with sqlite3.connect(backup) as copy:
                         old.backup(copy)
                     logger.info("[daka 1.9.1] Pre-upgrade database snapshot: %s", backup)
-        # A first-run SQLite snapshot before rewriting today's scoring-model
-        # revisions. This does not remove accounts, events, or prior day rules.
+        # v1.9.6 unifies every historical rule model. Snapshot the real DB
+        # (including WAL) once BEFORE changing even the old model flags.
         if db_path.is_file() and db_path.stat().st_size:
             with sqlite3.connect(db_path) as old:
-                has_migrations = old.execute(
-                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='score_engine_migrations'"
-                ).fetchone()
-                has_marker = (has_migrations and old.execute(
-                    "SELECT 1 FROM score_engine_migrations WHERE name=?",
-                    ("v1.9.5-smooth-decay",)
-                ).fetchone())
-                if not has_marker:
+                if old.execute("PRAGMA user_version").fetchone()[0] < 10906:
                     backup_dir = Path(get_astrbot_data_path()) / "backups" / "astrbot_plugin_daka"
                     backup_dir.mkdir(parents=True, exist_ok=True)
-                    backup = backup_dir / f"pre-1.9.5-{datetime.now():%Y%m%d-%H%M%S-%f}.sqlite3"
+                    backup = backup_dir / f"pre-1.9.6-{datetime.now():%Y%m%d-%H%M%S-%f}.sqlite3"
                     with sqlite3.connect(backup) as copy:
                         old.backup(copy)
-                    logger.info("[daka 1.9.5] Pre-decay-migration snapshot: %s", backup)
+                    logger.info("[daka 1.9.6] Pre-unified-scoring snapshot: %s", backup)
         self.store = ScoredStore(db_path, self.tz, clock=lambda: self._now())
         with self.store._db() as conn:
-            conn.execute("PRAGMA user_version=10905")
+            conn.execute("PRAGMA user_version=10906")
             conn.execute("CREATE TABLE IF NOT EXISTS ui_preferences ("
                          "scope TEXT NOT NULL, origin TEXT NOT NULL, mode TEXT NOT NULL, "
                          "PRIMARY KEY(scope, origin))")
@@ -1192,7 +1185,7 @@ class GroupDaka(Star):
                 f"打卡事件 {deleted['checkin_events']} 条。\n操作前备份：{backup}"), None
 
     def _task_command(self, args, scope, sender, nick, is_admin, today):
-        if not args or (len(args) == 1 and args[0] not in ("目标", "删除", "时间", "权重", "规则")):
+        if not args or (len(args) == 1 and args[0] not in ("目标", "删除", "时间", "权重", "规则", "排序")):
             name = self._canonical_habit(scope, args[0]) if args else None
             self.store.ensure_rules(scope)
             with self.store._db() as conn:
@@ -1202,14 +1195,15 @@ class GroupDaka(Star):
                 if not habits:
                     raise HabitError(f"找不到任务「{name}」，发送 /打卡 任务 查看全部任务。")
             lines = ["⚙️ 我的任务 · 04:00 换日"]
-            for h in habits:
+            for idx, h in enumerate(habits, start=1):
                 status = "启用" if h["enabled"] else "已停用"
                 timed = (f"最佳 {h['best_time']} · 缓降 H={h['delay_minutes']} 分"
                          if h['best_time'] else "不限时")
-                lines.append(f"{'✅' if h['enabled'] else '⏸️'} {h['name']} · {h['target']} 次/天 · "
+                lines.append(f"{'✅' if h['enabled'] else '⏸️'} {idx}. {h['name']} · {h['target']} 次/天 · "
                              f"权重 {fmt_number(h['weight'])} · {status}\n   {timed}")
             lines.append("\n管理：/打卡 任务 目标 阅读 2\n"
                          "停用：/打卡 任务 删除 阅读\n"
+                         "排序：/打卡 任务 排序 运动 2\n"
                          "规则：/打卡 任务 规则")
             return "\n".join(lines), None
 
@@ -1218,6 +1212,27 @@ class GroupDaka(Star):
             if values:
                 raise HabitError("用法：/打卡 任务 规则")
             return RULE_HELP, None
+        if kind == "排序":
+            if not values:
+                names = self.store.task_order(scope)
+                return ("📋 当前任务顺序（包含停用任务）：\n" +
+                        "\n".join(f"{i}. {name}" for i, name in enumerate(names, 1)) +
+                        "\n移动：/打卡 任务 排序 运动 2" +
+                        "\n批量：/打卡 任务 排序 睡觉 起床 运动 早餐 午餐 晚餐 规划待办 完成待办"), None
+            if len(values) == 2 and re.fullmatch(r"[0-9]+", values[1]):
+                if len(values[1]) > 4:
+                    raise HabitError("排序位置超出支持的任务数量。")
+                name = self._canonical_habit(scope, values[0])
+                new_order = self.store.reorder_tasks(scope, [name], position=int(values[1]))
+            else:
+                # Explicit non-positive / signed positions are not silently
+                # interpreted as a second habit name.
+                if len(values) == 2 and re.fullmatch(r"[-+][0-9]+", values[1]):
+                    raise HabitError("排序位置需为从 1 开始的正整数。")
+                names = [self._canonical_habit(scope, x) for x in values]
+                new_order = self.store.reorder_tasks(scope, names)
+            return ("✅ 任务显示顺序已更新（包含历史月历，未修改打卡记录或得分）：\n" +
+                    "\n".join(f"{i}. {name}" for i, name in enumerate(new_order, 1))), None
         if kind == "目标":
             if len(values) != 2:
                 raise HabitError("用法：/打卡 任务 目标 阅读 2")
@@ -1424,7 +1439,8 @@ class GroupDaka(Star):
         path = cache_file(self.data_dir / "cache", scope, user_id,
                           f"{year}-{month:02d}", "weighted-" + (habit_name or "all"))
         try:
-            image = render_weighted(path, year, month, days, stats, today, name, habit_name)
+            image = render_weighted(path, year, month, days, stats, today, name, habit_name,
+                                    task_order=self.store.task_order(scope))
         except Exception as exc:
             logger.warning('[daka 1.7] Calendar render failed: %s', safe_error(exc))
             image = None

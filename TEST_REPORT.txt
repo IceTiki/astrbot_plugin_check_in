@@ -1,34 +1,29 @@
-AstrBot habit check-in v1.9.5 -- scoring and README preview review
-Date: 2026-10-22
-Source: user-supplied astrbot_plugin_check_in-main.zip (v1.9.4)
+v1.9.6 离线测试报告
+=====================
 
-Changes
-- New gentle decay f(t)=(1+t*ln(2)/H)*2**(-t/H) for t>0.
-- New versioned rule model: smooth_decay; old half_life and weighted snapshots retained.
-- Current business day migration, persisted one-time marker; no event deletion.
-- v1.9.5 pre-migration SQLite snapshot on real plugin startup.
-- Updated rule explanation in the bot and README; sample SVG month/daily views.
+环境：Python 3.13 / pytest / 本地 SQLite / Pillow；QQ / AstrBot 采用测试桩。
+日期：2026-10-22
 
-Focused v1.9.5 tests (12): all passed.
-- Formula at negative/zero lateness and 0.25H, 0.5H, 1H, 2H, 3H.
-- Continuous, non-increasing score and legacy formula behavior.
-- New-user defaults and scored daily/month panels.
-- Existing database historical 1.9.4 day preserved / current day converted once.
-- SVG parsing, README asset references, and no SVG <script> elements.
+重点验证：
+- 历史 smooth_decay、half_life、weighted、legacy 标签统一按新公式计算。
+- 所有日期的月历与日视图使用新得分，包括旧日迟到 H 时约 84.7%。
+- 历史任务目标/权重/时间设置不被新版本覆盖。
+- 升级前自动创建 SQLite 一致性备份，迁移一次且重启幂等。
+- 缺失真实完成时间不虚构迟到。
+- 本人任务移动/批量排序同步历史规则及月历任务方格。
+- 排序不影响得分、记录、打卡事件；其他用户顺序保持不变。
+- 非法位置、过大输入、重复任务/不存在任务安全报错。
+- README SVG 仍能解析，月历 Pillow 渲染正常。
 
-Full bundled offline suite with new v1.9.5 tests:
-- 112 passed, 49 failed.
-- The original uploaded v1.9.4 bundle: 100 passed, 49 failed.
-- The same 49 test identifiers failed before and after this change.
-- Most of those pre-existing tests assume retired commands or outdated defaults.
-- Historical half_life-specific unit cases were made explicitly versioned,
-  so they continue exercising the old formula rather than the new default.
+关键专项测试：
+python -m pytest -q tests/test_v196_unified_scoring_sort.py tests/test_v195_smooth_decay.py tests/test_v17_half_life.py
+-> 48 passed（包括 18 项 v1.9.6 新测试）
 
-Other checks
-- Python compileall: passed.
-- SVG XML parse and CairoSVG PNG-render smoke test: passed.
-- ZIP validation: final package is checked using update_source.validate_archive.
+完整套件：
+python -m pytest -q
+-> 134 passed，45 failed（交付前完整离线重跑结果）
 
-Limits
-- No connection to live AstrBot, QQ clients, production Docker, or user data.
-- The SVG previews use synthetic examples, not private check-in records.
+重要说明：原 v1.9.5 上传版本离线跑出 112 passed / 49 failed。
+历史测试旧命令、旧任务模板、旧传输形态的预期与当前插件不一致；此次把 v1.7/v1.9.5 关于旧曲线的预期更新为统一公式，但没有改动那些不涉及新功能的旧失效测试。不能据此声称完整套件全部通过。
+
+未完成验证：在用户真实 AstrBot 环境重新加载插件、QQ 官方消息/图片/按钮显示、真实用户 SQLite 的历史月历变化。升级前请保留备份。

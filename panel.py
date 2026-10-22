@@ -1,6 +1,6 @@
 """Compact native chat panel. Buttons/links are added by qq_transport, once."""
 from datetime import timedelta, datetime
-from .scoring import (CURRENT_MODEL, summarize, fmt_number, fmt_percent, at_clock, late_factor)
+from .scoring import (summarize, fmt_number, fmt_percent, at_clock, late_factor)
 
 
 def timing_line(item, day, now, tz):
@@ -9,17 +9,11 @@ def timing_line(item, day, now, tz):
     best = at_clock(day, item["best_time"], tz)
     scale_point = best + timedelta(minutes=item["delay_minutes"])
     suffix = ("次日" if scale_point.date() > day else "") + scale_point.strftime("%H:%M")
-    if item.get("model") == "weighted":
-        line = f"最佳 {item['best_time']} · 旧版延迟窗口 {item['delay_minutes']}分（至{suffix}仍满分）"
-    elif item.get("model") == CURRENT_MODEL:
-        scale_score = fmt_percent(late_factor(day, item["best_time"], item["delay_minutes"],
-                                              scale_point, tz, model=CURRENT_MODEL))
-        line = f"最佳 {item['best_time']} · 缓降 H={item['delay_minutes']}分（{suffix}约{scale_score}）"
-    else:
-        line = f"最佳 {item['best_time']} · 旧版半衰期 {item['delay_minutes']}分（{suffix}降至50%）"
+    scale_score = fmt_percent(late_factor(day, item["best_time"], item["delay_minutes"],
+                                          scale_point, tz))
+    line = f"最佳 {item['best_time']} · 缓降 H={item['delay_minutes']}分（{suffix}约{scale_score}）"
     if not item["complete"]:
-        factor = late_factor(day, item["best_time"], item["delay_minutes"], now, tz,
-                             model=item.get("model", CURRENT_MODEL))
+        factor = late_factor(day, item["best_time"], item["delay_minutes"], now, tz)
         if factor < 1:
             line += f" \u00b7 \u73b0\u5728\u5f97\u5206{fmt_percent(factor)}"
     return line

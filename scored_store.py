@@ -1,8 +1,9 @@
 """Versioned, per-person task settings on top of the proven v1.5 identity DB.
 
-No destructive schema replacement. Dates already assigned by older versions are
-kept; a 04:00 day boundary is used for NEW actions. Task rule revisions start on
-a business date. Editing today's rules re-scores today, never an earlier date.
+No destructive schema replacement. Historical check-in times and each day's
+weight/target/time settings remain intact. v1.9.6 scores *all* days with the
+same smooth curve. Display order is a presentation preference shared by all
+dates; sorting rewrites only sort_order of that person's rule revisions.
 """
 from __future__ import annotations
 
@@ -49,49 +50,23 @@ class ScoredStore(AccountCheckinStore):
         # Version-aware backup is performed by main.py before this constructor.
         for scope in scopes:
             self.ensure_rules(scope)
-        self._migrate_half_life_once()
-        self._migrate_smooth_decay_once()
+        self._migrate_unified_decay_once()
 
-    def _migrate_half_life_once(self):
-        """Transition only the current check-in day; previous rules stay frozen.
+    def _migrate_unified_decay_once(self):
+        """Set every historical rule revision to the single current model.
 
-        A database-wide marker prevents re-scoring future days on each reboot.
-        First-time personal accounts start directly with the new rule model.
+        Does NOT touch records, checkin_events, timestamps, targets, weights,
+        best_time or any user/identity table. A transaction and one-time marker
+        keep restarts idempotent. Older migration markers remain as audit data.
         """
-        today = self.today()
         with self._db() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            if conn.execute("SELECT 1 FROM score_engine_migrations WHERE name=?",
-                            ("v1.7-half-life",)).fetchone():
-                return
-            scopes = [r[0] for r in conn.execute("SELECT scope FROM score_profiles")]
-            for scope in scopes:
-                for rule in self._rules_locked(conn, scope, today, include_disabled=True):
-                    if rule["model"] == "weighted":
-                        rule["model"] = "half_life"
-                        self._write_locked(conn, scope, rule, today)
-            conn.execute("INSERT INTO score_engine_migrations VALUES (?,?)",
-                         ("v1.7-half-life", self.clock().isoformat(timespec="seconds")))
-
-    def _migrate_smooth_decay_once(self):
-        """Switch current (including already recorded) day to the gentler curve.
-
-        Previous days retain their original half_life/weighted/legacy model.
-        Run once per DB, so future bootstraps cannot rewrite history and
-        day-boundary changes do not repeatedly modify snapshots.
-        """
-        today = self.today()
-        with self._db() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            marker = "v1.9.5-smooth-decay"
+            marker = "v1.9.6-unified-smooth-decay"
             if conn.execute("SELECT 1 FROM score_engine_migrations WHERE name=?",
                             (marker,)).fetchone():
                 return
-            scopes = [r[0] for r in conn.execute("SELECT scope FROM score_profiles")]
-            for scope in scopes:
-                for rule in self._rules_locked(conn, scope, today, include_disabled=True):
-                    if rule["model"] == "half_life":
-                        self._write_locked(conn, scope, dict(rule, model=CURRENT_MODEL), today)
+            conn.execute("UPDATE habit_rules SET model=? WHERE model<>?",
+                         (CURRENT_MODEL, CURRENT_MODEL))
             conn.execute("INSERT INTO score_engine_migrations VALUES (?,?)",
                          (marker, self.clock().isoformat(timespec="seconds")))
 
@@ -120,7 +95,7 @@ class ScoredStore(AccountCheckinStore):
         for r in conn.execute("SELECT * FROM habit_rules WHERE scope=?", (src,)).fetchall():
             conn.execute("INSERT OR IGNORE INTO habit_rules VALUES (?,?,?,?,?,?,?,?,?,?)",
                          (dst, r["name"], r["since_day"], r["target"], r["weight"],
-                          r["best_time"], r["delay_minutes"], r["enabled"], r["sort_order"], r["model"]))
+                          r["best_time"], r["delay_minutes"], r["enabled"], r["sort_order"], CURRENT_MODEL))
         # AccountCheckinStore copies core event columns; carry the new column too.
         for e in conn.execute("SELECT * FROM checkin_events WHERE scope=? AND occurred_at IS NOT NULL",
                               (src,)).fetchall():
@@ -162,11 +137,11 @@ class ScoredStore(AccountCheckinStore):
                 if first_record:
                     start = min(start, date.fromisoformat(first_record))
                 starts.append(start)
-                # Preserve legacy scoring prior to cutover. New scores are not
-                # retroactively imposed on an old count-based tracking system.
+                # Keep the old account's known historical tasks/settings.
+                # When timestamps are absent, no lateness is presumed.
                 conn.execute("INSERT OR IGNORE INTO habit_rules VALUES (?,?,?,?,?,?,?,?,?,?)",
                              (scope, h["name"], start.isoformat(), h["target"], 1.0, None,
-                              30, h["enabled"], index, "legacy"))
+                              30, h["enabled"], index, CURRENT_MODEL))
             # Rename without changing assigned dates or destroying event times.
             for old, new in RENAMES.items():
                 oldrow = conn.execute("SELECT 1 FROM habits WHERE scope=? AND name=?", (scope, old)).fetchone()
@@ -178,7 +153,7 @@ class ScoredStore(AccountCheckinStore):
                     # Keep ambiguous old/new histories separate instead of adding them.
                     rule = self._rule_locked(conn, scope, old, cutover, allow_disabled=True)
                     self._write_locked(conn, scope, dict(rule, enabled=0, model=CURRENT_MODEL), cutover)
-            # Existing custom tasks use the current gentle-decay model from cutover.
+            # Existing custom tasks inherit current default scoring for all dates.
             for r in self._rules_locked(conn, scope, cutover, include_disabled=True):
                 self._write_locked(conn, scope, dict(r, model=CURRENT_MODEL), cutover)
             for order, (name, target, best, delay) in enumerate(DEFAULT_RULES):
@@ -269,6 +244,46 @@ class ScoredStore(AccountCheckinStore):
             r["model"] = CURRENT_MODEL
             self._write_locked(conn, scope, r, day)
         return r
+
+    def task_order(self, scope: str) -> list[str]:
+        """Current presentation order, including disabled tasks for history."""
+        self.ensure_rules(scope)
+        with self._db() as conn:
+            return [r["name"] for r in self._rules_locked(
+                conn, scope, self.today(), include_disabled=True)]
+
+    def reorder_tasks(self, scope: str, names: list[str], *, position: int | None = None) -> list[str]:
+        """Reorder only this person's tasks for ALL dates, atomically.
+
+        ``position`` is a 1-based target slot for exactly one task. Without a
+        position, provided names become the prefix; unmentioned tasks retain
+        their relative order. Disabled tasks remain configurable and are never
+        deleted. Targets, scoring settings, events, and record counts are intact.
+        """
+        self.ensure_rules(scope)
+        with self._db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            ordered = [r["name"] for r in self._rules_locked(
+                conn, scope, self.today(), include_disabled=True)]
+            if not ordered:
+                raise HabitError("当前没有可排序的任务。")
+            if not names or len(set(names)) != len(names):
+                raise HabitError("请提供不重复的任务名称。")
+            unknown = [name for name in names if name not in ordered]
+            if unknown:
+                raise HabitError(f"找不到任务「{unknown[0]}」，请先发送 /打卡 任务 查看任务列表。")
+            if position is not None:
+                if len(names) != 1 or not 1 <= position <= len(ordered):
+                    raise HabitError(f"排序位置必须在 1～{len(ordered)} 之间。")
+                ordered.remove(names[0])
+                ordered.insert(position - 1, names[0])
+            else:
+                ordered = names + [name for name in ordered if name not in names]
+            for i, name in enumerate(ordered):
+                # Display sorting applies to historical date snapshots too.
+                conn.execute("UPDATE habit_rules SET sort_order=? WHERE scope=? AND name=?",
+                             (i, scope, name))
+            return ordered
 
     def add_habit(self, scope, name, target, user_id, cap=64):
         self.ensure_rules(scope)

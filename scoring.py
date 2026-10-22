@@ -2,10 +2,10 @@
 
 Business day: [04:00, next day 04:00), in the configured local timezone.
 A time target before 04:00 belongs to the END of that business day.
-For v1.9.5+ rules the time credit uses gentle/smooth decay:
+From v1.9.6, every date uses the SAME gentle decay:
     (1 + ln(2) * t / H) * 2 ** (-t / H).
-Existing v1.7-v1.9.4 half-life snapshots and v1.6 weighted snapshots
-retain their original formulas; historical rule revisions are not rewritten.
+Historical target, weight and best-time settings remain date-specific. Old
+scoring-model flags do not change the formula or the raw check-in timestamps.
 """
 from __future__ import annotations
 
@@ -89,12 +89,10 @@ def parse_backfill_time(day: date, raw: str, tz: ZoneInfo, now: datetime) -> dat
 def late_factor(day: date, best_time: str | None, delay_minutes: int,
                 occurred_at: datetime | None, tz: ZoneInfo,
                 model: str = CURRENT_MODEL) -> float:
-    """Score a check-in with the rule model saved for its business date.
+    """Time score for all dates, regardless of historical model flags.
 
-    ``delay_minutes`` is retained in storage and command aliases, but under
-    ``smooth_decay`` it is the *scale* H (not the actual half-life).
-    ``half_life`` preserves the earlier 2**(-t/H) model for history.
-    ``weighted`` preserves the still older interval/step model.
+    ``model`` is kept in the signature for older integrations, but ignored.
+    ``delay_minutes`` is the decay scale H, never a half-life.
     """
     if best_time is None or occurred_at is None:
         return 1.0
@@ -105,15 +103,9 @@ def late_factor(day: date, best_time: str | None, delay_minutes: int,
     if seconds <= 0:
         return 1.0
     scale_seconds = validate_delay(delay_minutes) * 60
-    if model == "weighted":  # v1.6 snapshots: first window full, then steps
-        steps = max(0, math.ceil(seconds / scale_seconds) - 1)
-        return math.ldexp(1.0, -min(steps, 1075))
     x = seconds / scale_seconds
-    if model == CURRENT_MODEL:
-        # f(0)=1, f(H)=(1+ln(2))/2=84.66%; strictly decreasing for t>0.
-        return (1.0 + x * math.log(2.0)) * math.exp2(-x)
-    # For old rule snapshots, do not change already-ended business dates.
-    return math.exp2(-x)
+    # f(0)=1, f(H)=(1+ln(2))/2=84.66%; all dates use this exact curve.
+    return (1.0 + x * math.log(2.0)) * math.exp2(-x)
 
 
 def _parse_stamp(raw, tz):
@@ -130,10 +122,10 @@ def score_item(rule: dict, amount: int, events: list[dict], day: date,
                tz: ZoneInfo, legacy_at: str | None = None) -> dict:
     """Cap total contribution at one weight, even for multi-count tasks.
 
-    Existing unknown/backfilled timestamps are never guessed. Legacy scoring
-    versions retain their pre-upgrade all-or-nothing count-based semantics.
-    For modern time rules, missing historic timestamps have no retrospective
-    penalty, and the uncertainty is explicit in the output.
+    Existing unknown/backfilled timestamps are never guessed. All historic
+    versions use the same smooth curve when a real timestamp and best time are
+    known. Missing timestamps have no retrospective time penalty; the item
+    explicitly reports this uncertainty.
     """
     target = max(1, int(rule["target"]))
     credited = min(max(0, int(amount)), target)
@@ -152,8 +144,7 @@ def score_item(rule: dict, amount: int, events: list[dict], day: date,
         occurred = _parse_stamp(raw, tz)
         if occurred is None and rule.get("best_time"):
             unknown = True
-        factor = late_factor(day, rule.get("best_time"), rule["delay_minutes"], occurred, tz,
-                             model=rule.get("model", CURRENT_MODEL))
+        factor = late_factor(day, rule.get("best_time"), rule["delay_minutes"], occurred, tz)
         contributions.append(take * factor)
         if occurred is not None:
             actuals.append(occurred)
@@ -162,16 +153,16 @@ def score_item(rule: dict, amount: int, events: list[dict], day: date,
         contributions.append(float(remaining))
         unknown = bool(rule.get("best_time")) or unknown
     progress = credited / target
-    score = (float(credited >= target) if rule.get("model") == "legacy"
-             else min(1.0, math.fsum(contributions) / target))
+    score = min(1.0, math.fsum(contributions) / target)
     weight = float(rule["weight"])
-    item = dict(rule, amount=int(amount), progress=progress, score=score,
+    item = dict(rule, model=CURRENT_MODEL,
+                amount=int(amount), progress=progress, score=score,
                 earned=score * weight, complete=credited >= target,
                 optional=weight == 0, time_unknown=unknown,
                 first_at=min(actuals).isoformat() if actuals else None,
                 last_at=max(actuals).isoformat() if actuals else None,
                 legacy_at=legacy_at if credited and not actuals else None)
-    item["penalized"] = rule.get("model") != "legacy" and score + 1e-10 < progress
+    item["penalized"] = score + 1e-10 < progress
     return item
 
 

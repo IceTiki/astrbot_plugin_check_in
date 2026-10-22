@@ -10,10 +10,11 @@ import xml.etree.ElementTree as ET
 
 import pytest
 
+from test_regressions import resolve  # Install offline stubs before importing plugin.
+
 from astrbot_plugin_daka.scoring import CURRENT_MODEL, business_day, late_factor, score_item
 from astrbot_plugin_daka.scored_store import ScoredStore
 from astrbot_plugin_daka.panel import timing_line
-from test_regressions import resolve
 
 Z = ZoneInfo('Asia/Shanghai')
 D = date(2026, 10, 17)
@@ -46,11 +47,10 @@ def test_new_curve_does_not_exceed_full_credit_and_is_monotone():
     assert all(isfinite(x) for x in values)
 
 
-def test_old_model_is_still_available_for_historical_rule_snapshots():
-    assert late_factor(D, '08:00', 60, dt(17, 9), Z, model='half_life') == pytest.approx(.5)
-    assert late_factor(D, '08:00', 60, dt(17, 9), Z, model='weighted') == 1
-    assert late_factor(D, '08:00', 60, dt(17, 9, 1), Z, model='weighted') == .5
-    assert late_factor(D, '08:00', 60, dt(17, 9), Z, model=CURRENT_MODEL) == pytest.approx(factor(1))
+def test_old_model_flags_now_use_unified_smooth_decay():
+    for model in ('half_life', 'weighted', 'legacy', CURRENT_MODEL):
+        assert late_factor(D, '08:00', 60, dt(17, 9), Z, model=model) == pytest.approx(factor(1))
+        assert late_factor(D, '08:00', 60, dt(17, 9, 1), Z, model=model) == pytest.approx(factor(61/60))
     assert business_day(dt(18, 0, 30)) == D
 
 
@@ -74,7 +74,7 @@ def test_bootstrap_has_eight_gentle_score_tasks(tmp_path):
     assert month['ratio'] == pytest.approx(factor(1) / 8)
 
 
-def test_existing_v194_old_day_frozen_and_today_migrated_once(tmp_path):
+def test_existing_v194_days_both_recomputed_and_migrated_once(tmp_path):
     path=tmp_path/'upgrade.sqlite3'
     clock=[dt(17, 12)]
     db=ScoredStore(path, Z, clock=lambda: clock[0])
@@ -86,25 +86,25 @@ def test_existing_v194_old_day_frozen_and_today_migrated_once(tmp_path):
     # Simulate two v1.9.4 rule revisions and absence of the new migration marker.
     with db._db() as conn:
         conn.execute("UPDATE habit_rules SET model='half_life' WHERE scope=? AND name='起床'",(scope,))
-        conn.execute("DELETE FROM score_engine_migrations WHERE name='v1.9.5-smooth-decay'")
-    assert next(x for x in db.daily(scope,'self',D) if x['name']=='起床')['score'] == pytest.approx(.5)
+        conn.execute("DELETE FROM score_engine_migrations WHERE name='v1.9.6-unified-smooth-decay'")
+    assert next(x for x in db.daily(scope,'self',D) if x['name']=='起床')['score'] == pytest.approx(factor(1))
     db2=ScoredStore(path, Z, clock=lambda:clock[0])
     before=next(x for x in db2.daily(scope,'self',D) if x['name']=='起床')
     after=next(x for x in db2.daily(scope,'self',next_day) if x['name']=='起床')
-    assert before['model']=='half_life' and before['score']==pytest.approx(.5)
+    assert before['model']==CURRENT_MODEL and before['score']==pytest.approx(factor(1))
     assert after['model']==CURRENT_MODEL and after['score']==pytest.approx(factor(1))
     with db2._db() as conn:
         amount_before=conn.execute("SELECT COUNT(*) FROM checkin_events WHERE scope=?",(scope,)).fetchone()[0]
         count_before=conn.execute("SELECT COUNT(*) FROM habit_rules WHERE scope=?",(scope,)).fetchone()[0]
         assert amount_before==2
-    # The marker prevents rewriting old snapshots on later starts or day changes.
+    # The marker prevents redundant migration on later starts or day changes.
     clock[0]=dt(19, 12)
     db3=ScoredStore(path, Z, clock=lambda:clock[0])
     with db3._db() as conn:
         assert conn.execute("SELECT COUNT(*) FROM checkin_events WHERE scope=?",(scope,)).fetchone()[0]==amount_before
         assert conn.execute("SELECT COUNT(*) FROM habit_rules WHERE scope=?",(scope,)).fetchone()[0]==count_before
-        assert conn.execute("SELECT COUNT(*) FROM score_engine_migrations WHERE name='v1.9.5-smooth-decay'").fetchone()[0]==1
-    assert next(x for x in db3.daily(scope,'self',D) if x['name']=='起床')['score']==pytest.approx(.5)
+        assert conn.execute("SELECT COUNT(*) FROM score_engine_migrations WHERE name='v1.9.6-unified-smooth-decay'").fetchone()[0]==1
+    assert next(x for x in db3.daily(scope,'self',D) if x['name']=='起床')['score']==pytest.approx(factor(1))
 
 
 def test_readme_preview_assets_are_valid_svg_and_self_contained():

@@ -1,93 +1,29 @@
-# v1.6.0 implementation and source audit
+# v1.9.6 源码审查：全历史统一计分与用户排序
 
-Date: 2026-10-17
+审查日期：2026-10-22。审查对象：本仓库 v1.9.6 源码及其本地 SQLite / Pillow 测试，不包含真实 QQ/AstrBot 部署。
 
-## Scope of this change
+## 本次改动
 
-The starting point is the supplied `astrbot_plugin_daka_v1.5.0.zip`, not a new QQ transport implementation. The user has reported working buttons and images with that version.
+1. `scoring.py`：不再按照历史规则的 `model` 字段选择不同曲线。即使历史记录标记 `half_life`、`weighted` 或 `legacy`，只要有已配置最佳时间和有效完成时间，所有日期都使用
+   `f(t) = (1 + t ln(2) / H) * 2**(-t/H)`。准时得 100%，迟到 H 分钟得约 84.66%，迟到 2H 分钟得约 59.66%。
+2. `scored_store.py`：新增一次性迁移标记 `v1.9.6-unified-smooth-decay`，将所有历史 `habit_rules.model` 更新为 `smooth_decay`，不修改各日期原本的 `target`、`weight`、`best_time`、`delay_minutes`、`enabled`、`since_day` 或事件时间。月历与每日查询调用同一个 `score_item`。无真实完成时间的历史打卡不会凭空推算迟到。
+3. `scored_store.py`：`task_order()` 和 `reorder_tasks()` 支持按位置移动或批量指定前缀，其余保持原顺序。SQLite 事务只更新本人的 `habit_rules.sort_order`，包括历史日期的规则修订；任务停用不删除。不会写入其他人的记录。
+4. `main.py`：新增 `/打卡 任务 排序`、`/打卡 任务 排序 运动 2` 和批量排序。任务管理清单显示序号；月历绘制传入当前任务优先级。插件在首次升级 v1.9.6 并迁移前通过 SQLite backup API 创建一致性备份，并将 `user_version` 升至 `10906`。
+5. `weighted_calendar.py`：月历色块/图例不再以月份第一天出现的任务次序为准，而以当前配置次序排列当月存在的任务，保证旧月历与每日视图和 QQ 快捷按钮的任务顺序一致。任务颜色仍按名称确定。
+6. `panel.py`、`help_content.py`、`README.md`、`metadata.yaml`、`update_source.py`：删除过时历史旧公式说明、更新排序帮助和升级使用说明，版本统一为 1.9.6。保留 v1.9.5 的 README SVG 示例。
 
-- `accounts.py`: existing AppID/OpenID identity resolution retained.
-- `qq_transport.py`: authenticated QQ v2 request and media upload paths retained. Keyboard success no longer duplicates the entire command-link list. Keyboard failure still falls back to native command links, then plain text. Button labels now show multi-count progress or a completion mark. Type=2 group/C2C semantics are unchanged.
-- `scoring.py`: new pure functions for a 04:00 business day, time coefficients, partial-count scoring, weights and aggregate ratios.
-- `scored_store.py`: extension of the existing identity store, not a replacement identity system. Adds dated rule revisions and an `occurred_at` column while retaining `checked_at` as the operation timestamp.
-- `panel.py`: compact plain/native-Markdown body, without duplicating the interactive action controls.
-- `weighted_calendar.py`: actual seven-column PNG and text fallback using the same computed score metrics.
-- `main.py`: new commands, new store and renderers, same explicit-send-before-stop lifecycle.
-- `update_source.py`: source-only updater changed to validate version 1.6.0 and require all new modules. Existing backup, mount checks and failure handling retained.
-- `store.py` still contains OLD defaults for legacy data compatibility. Live v1.6 defaults are in `scoring.DEFAULT_RULES` and are applied by `ScoredStore`, once per existing account.
+## 数据安全与兼容性
 
-## Scoring interpretation
+- **不删除或重写** `records` / `checkin_events` / 账户身份数据。
+- 新版本会改变**历史得分结果**（这是明确的产品需求），但不改变任何打卡时间。无数据可确定迟到时间时，不补造时间。
+- **历史任务参数仍按日期读取**：统一的是函数，而不是将今天的任务参数套在所有旧日期上。
+- 每个人的排序彼此独立；包含停用的任务及跨历史日期的展示。
+- 排序会更新规则表里的 `sort_order` 以使旧日期同步，因此严格意义上数据库确实发生了**展示次序字段**的变化；不会改变计分参数、事件或得分。
+- 数据库备份路径：`backups/astrbot_plugin_daka/pre-1.9.6-*.sqlite3`。ZIP 更新器还会备份源码和 `plugin_data`。
 
-These are product rules based on the user's request, not medical guidance or features provided by QQ:
+## 验证范围与限制
 
-1. The first interval after the best time is grace, including the right endpoint at recorded second precision.
-2. Each subsequent started interval halves the contribution of that check-in.
-3. Multi-count tasks distribute one total task weight across the target number of check-ins.
-4. A zero-weight task has no effect on aggregate denominators.
-5. Setting changes apply to the current business day and future dates; previously ended dates keep their rule versions.
-6. Monthly completion is SUM(earned points) / SUM(possible points), not an unweighted average of percentages.
-7. Old date assignments are not silently reclassified when the new 04:00 boundary is introduced.
-8. A task name describing an hour of work is a self-reported counter, not evidence of elapsed work duration.
-
-## Official references rechecked
-
-AstrBot plugin layout, persistent-data location and loading conventions:
-https://docs.astrbot.app/dev/star/plugin-new.html
-
-QQ custom Markdown structure:
-https://bot.q.qq.com/wiki/develop/api-v2/server-inter/message/type/markdown.html
-
-AstrBot official QQ event implementation, authenticated media handling and sends:
-https://raw.githubusercontent.com/AstrBotDevs/AstrBot/master/astrbot/core/platform/sources/qqofficial/qqofficial_message_event.py
-
-The following are the v1.5 transport references, retained for context rather than newly implemented mechanisms:
-
-QQ command text links:
-https://bot.q.qq.com/wiki/develop/api-v2/server-inter/message/trans/text-chain.html
-
-QQ group message payload and keyboard action structure:
-https://bot.q.qq.com/wiki/develop/api-v2/autogen/api/v2_groups_group_openid_messages.post.html
-
-No new callback event handler, AppID discovery method, privileged QQ capability or third-party bot account is introduced by this release.
-
-## Verification limits
-
-See TEST_REPORT.txt. Tests exercise real SQLite databases and image rendering; AstrBot events, QQ HTTP responses and Docker actions are fixtures. The tests do not connect to the user's host, do not authenticate to QQ, and do not prove how a particular QQ client renders the new layout.
-
-No font files, tokens, personal records or user screenshots are included in the plugin archive.
-
-## v1.9.4 monthly-calendar rendering correction (2026-10-21)
-
-- Task marker fill is now driven by each task's scored `score` ratio, not `amount / target`. A task completed late can therefore display a partial marker even when its count target was reached.
-- Default eight-task views use a four-column, two-row marker layout with larger squares. Larger custom task lists adapt their marker size and row count.
-- The monthly completion percentage and its progress bar are more prominent; per-day progress bars are thicker.
-- Empty markers use a high-contrast outline. Inactive/future markers use a low-contrast border and a short dash.
-- No scoring formula, database schema, task history, or stored records were changed.
-- Focused regression tests for score-proportional fill, empty/faint contrast, and the monthly summary bar pass.
-- The bundled legacy suite still has pre-existing mismatches with the current v1.9.3 code: the original archive had 49 failures / 97 passes; after this change it has the same 49 failing test identifiers and 100 passes (three new focused tests). These existing failures are not represented as passing, and the comparison does not replace live AstrBot/QQ verification.
-
-## v1.9.5 gentle-decay update (2026-10-22)
-
-- Scoring: newly effective date rules use `smooth_decay` and evaluate
-  `(1 + (t/H)*ln(2)) * 2**(-t/H)` for lateness `t>0`, with full credit
-  at/before best time. In contrast, historical `half_life` and `weighted`
-  snapshots keep the original formulas.
-- Migration: `v1.9.5-smooth-decay` marker converts only the current business
-  day's active and disabled `half_life` rule revisions. Earlier dates do not
-  change; event timestamps/counts are never altered. New accounts start
-  directly on `smooth_decay`. Existing databases receive a one-time SQLite
-  backup before this rule migration in normal AstrBot plugin startup.
-- Presentation: CLI help, task listing, native text panel, and shared
-  image-scoring inputs use the new curve and label `H` as a decay scale,
-  not an actual 50%-after-H half-life. Retired independent commands remain
-  retired; the unified `/打卡 任务 时间 ...` entry is unchanged.
-- Packaging: v1.9.5 metadata and source-only ZIP updater version checks.
-  The migration script `migrate_defaults_v193.py` now writes `smooth_decay`
-  when it intentionally resets default task rules for existing accounts.
-- Documentation: completely refreshed README with scaled, standalone
-  script-free SVG illustrations for month and daily sample status, current
-  math and scored progression tables, command reference, permissions,
-  migration and safe upgrade paths.
-- Verification: see `TEST_REPORT.txt` for focused tests and the disclosed
-  pre-existing failures of the old bundled regression suites. No live
-  AstrBot / QQ / Docker deployment has been performed.
+- 新版测试覆盖旧 `model` 标记、历史日期统一重算、首次升级备份、幂等迁移、缺失时间处理、时间/权重版本保留、移动/批量排序、越界/重复校验、用户隔离、月历渲染与命令入口。
+- `update_source.py` 只做本地离线包校验；没有实际停止/重启用户的 Docker 容器。
+- 没有访问生产 SQLite 数据库，没有真实向 QQ 发送消息，也不能据此证明客户端按钮/图片实际渲染符合预期。
+- 历史测试中仍有使用旧命令体系和旧默认习惯的过时预期；完整失败清单请参见 `TEST_REPORT.txt`。
