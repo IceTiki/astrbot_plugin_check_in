@@ -44,19 +44,21 @@ PERSONAL_PREF_ORIGIN = "__person__"
 from .command_names import RESERVED_COMMANDS, RETIRED_COMMANDS, validate_task_name
 
 
-RULE_HELP = """📐 连续半衰期计分（v1.7）
+RULE_HELP = """📐 温和衰减计分（v1.9.5）
 打卡日：04:00 至次日 03:59:59（配置时区）。
-提前或准时完成得100%；超过最佳时间后立即连续下降。
-每经过一个半衰期H，剩余得分降到一半；晚2H得25%，晚3H得12.5%。
-时间系数 = 2 ** (-迟到分钟 / H)，迟到分钟取 max(0, 实际时间-最佳时间)。
-例：睡觉最佳23:30、H=60分钟：23:45 得84.1%，次日00:30得50%，次日01:30得25%。
+提前或准时：100%；超出最佳时间后逐渐下降，无额外宽限期。
+迟到分钟 t = max(0, 实际完成时间 - 最佳时间)，H 为衰减尺度（分钟）。
+新时间系数 f(t) = (1 + t×ln(2)/H) × 2^(-t/H)。
+H 不再是严格意义上的半衰期：晚 H 得84.7%，晚2H得59.7%，晚3H得38.5%。
+例：睡觉最佳23:30、H=60分钟：23:45得98.7%，次日00:30得84.7%，次日01:30得59.7%。
 任务得分 = 权重 × 目标次数内各次打卡时间系数之和 / 目标次数。
-每日完成度=当天累计得分/当天有效权重，月完成度按已计入日期累计。
+每日完成度 = 当天累计得分 / 当天有效权重；月完成度按计分日期累计。
 多次任务各次独立计分；权重为0可记录但不影响总分。
 任务达标后额外打卡不增加次数、不覆盖完成时间。
-修改设置从当前打卡日起生效，以前完成的日期继续沿用旧规则：
-v1.6 已结束日期使用原阶梯式扣分；历史旧数据不猜测不存在的时间。
-命令：/打卡 任务 时间 睡觉 23:30 30；/打卡 任务 权重 阅读 0。
+新公式从首次使用 v1.9.5 的打卡日起生效；之前已结束的日期仍按旧规则计分。
+旧版连续半衰期规则 f(t)=2^(-t/H) 仅用于旧日期，v1.6历史沿用原阶梯式扣分。
+旧数据库字段仍叫 delay_minutes；设置时请用统一命令 /打卡 任务 时间，不再使用旧独立命令。
+命令：/打卡 任务 时间 睡觉 23:30 60；/打卡 任务 权重 阅读 0。
 此功能只记录自报完成时间，不验证真实睡眠或工作。"""
 
 
@@ -100,9 +102,27 @@ class GroupDaka(Star):
                     with sqlite3.connect(backup) as copy:
                         old.backup(copy)
                     logger.info("[daka 1.9.1] Pre-upgrade database snapshot: %s", backup)
+        # A first-run SQLite snapshot before rewriting today's scoring-model
+        # revisions. This does not remove accounts, events, or prior day rules.
+        if db_path.is_file() and db_path.stat().st_size:
+            with sqlite3.connect(db_path) as old:
+                has_migrations = old.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='score_engine_migrations'"
+                ).fetchone()
+                has_marker = (has_migrations and old.execute(
+                    "SELECT 1 FROM score_engine_migrations WHERE name=?",
+                    ("v1.9.5-smooth-decay",)
+                ).fetchone())
+                if not has_marker:
+                    backup_dir = Path(get_astrbot_data_path()) / "backups" / "astrbot_plugin_daka"
+                    backup_dir.mkdir(parents=True, exist_ok=True)
+                    backup = backup_dir / f"pre-1.9.5-{datetime.now():%Y%m%d-%H%M%S-%f}.sqlite3"
+                    with sqlite3.connect(backup) as copy:
+                        old.backup(copy)
+                    logger.info("[daka 1.9.5] Pre-decay-migration snapshot: %s", backup)
         self.store = ScoredStore(db_path, self.tz, clock=lambda: self._now())
         with self.store._db() as conn:
-            conn.execute("PRAGMA user_version=10901")
+            conn.execute("PRAGMA user_version=10905")
             conn.execute("CREATE TABLE IF NOT EXISTS ui_preferences ("
                          "scope TEXT NOT NULL, origin TEXT NOT NULL, mode TEXT NOT NULL, "
                          "PRIMARY KEY(scope, origin))")
@@ -1184,7 +1204,7 @@ class GroupDaka(Star):
             lines = ["⚙️ 我的任务 · 04:00 换日"]
             for h in habits:
                 status = "启用" if h["enabled"] else "已停用"
-                timed = (f"最佳 {h['best_time']} · 半衰期 {h['delay_minutes']} 分"
+                timed = (f"最佳 {h['best_time']} · 缓降 H={h['delay_minutes']} 分"
                          if h['best_time'] else "不限时")
                 lines.append(f"{'✅' if h['enabled'] else '⏸️'} {h['name']} · {h['target']} 次/天 · "
                              f"权重 {fmt_number(h['weight'])} · {status}\n   {timed}")
@@ -1230,7 +1250,7 @@ class GroupDaka(Star):
                 self.store.configure(scope, name, best_time=validate_clock(raw),
                                      delay_minutes=validate_delay(values[2]) if len(values) == 3 else None)
             else:
-                raise HabitError("关闭时间规则时不需要半衰期参数。")
+                raise HabitError("关闭时间规则时不需要衰减尺度参数。")
             return f"✅ 「{name}」的时间规则已更新，从今天起生效。", None
         if kind == "权重":
             if len(values) != 2:

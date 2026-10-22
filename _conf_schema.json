@@ -5,7 +5,7 @@
     "default": "Asia/Shanghai"
   },
   "max_habits_per_group": {
-    "description": "每人最多习惯数（含默认七项，7～64；沿用旧配置名以保持兼容）",
+    "description": "每人最多习惯数（含默认八项，7～64；沿用旧配置名以保持兼容）",
     "type": "int",
     "default": 64
   },

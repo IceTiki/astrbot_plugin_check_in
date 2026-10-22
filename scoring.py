@@ -2,9 +2,10 @@
 
 Business day: [04:00, next day 04:00), in the configured local timezone.
 A time target before 04:00 belongs to the END of that business day.
-For new rules, credit decays continuously immediately after the best time:
-one configured half-life (the former delay_minutes setting) leaves 50% credit.
-Old weighted rule snapshots retain the v1.6 step/grace behavior.
+For v1.9.5+ rules the time credit uses gentle/smooth decay:
+    (1 + ln(2) * t / H) * 2 ** (-t / H).
+Existing v1.7-v1.9.4 half-life snapshots and v1.6 weighted snapshots
+retain their original formulas; historical rule revisions are not rewritten.
 """
 from __future__ import annotations
 
@@ -16,6 +17,7 @@ from zoneinfo import ZoneInfo
 from .store import HabitError
 
 RESET_HOUR = 4
+CURRENT_MODEL = "smooth_decay"
 DEFAULT_RULES = (
     ("睡觉", 1, "23:30", 60),
     ("起床", 1, "08:00", 60),
@@ -48,9 +50,9 @@ def validate_delay(raw: str | int) -> int:
     try:
         value = int(raw)
     except (ValueError, TypeError) as exc:
-        raise HabitError("半衰期必须是整数分钟。") from exc
+        raise HabitError("衰减尺度 H 必须是整数分钟。") from exc
     if not 1 <= value <= 1440:
-        raise HabitError("半衰期需要在 1～1440 分钟之间。")
+        raise HabitError("衰减尺度 H 需要在 1～1440 分钟之间。")
     return value
 
 
@@ -86,12 +88,13 @@ def parse_backfill_time(day: date, raw: str, tz: ZoneInfo, now: datetime) -> dat
 
 def late_factor(day: date, best_time: str | None, delay_minutes: int,
                 occurred_at: datetime | None, tz: ZoneInfo,
-                model: str = "half_life") -> float:
-    """Continuous half-life scoring, retaining old step rules for past dates.
+                model: str = CURRENT_MODEL) -> float:
+    """Score a check-in with the rule model saved for its business date.
 
-    ``delay_minutes`` is the persisted setting name for compatibility, but for
-    ``half_life`` it means minutes from the best time until score reaches 50%.
-    No plateau/grace window: 1 second after best time is already below 100%.
+    ``delay_minutes`` is retained in storage and command aliases, but under
+    ``smooth_decay`` it is the *scale* H (not the actual half-life).
+    ``half_life`` preserves the earlier 2**(-t/H) model for history.
+    ``weighted`` preserves the still older interval/step model.
     """
     if best_time is None or occurred_at is None:
         return 1.0
@@ -101,11 +104,16 @@ def late_factor(day: date, best_time: str | None, delay_minutes: int,
     seconds = (occurred_at.astimezone(tz) - best).total_seconds()
     if seconds <= 0:
         return 1.0
-    half_life_seconds = validate_delay(delay_minutes) * 60
+    scale_seconds = validate_delay(delay_minutes) * 60
     if model == "weighted":  # v1.6 snapshots: first window full, then steps
-        steps = max(0, math.ceil(seconds / half_life_seconds) - 1)
+        steps = max(0, math.ceil(seconds / scale_seconds) - 1)
         return math.ldexp(1.0, -min(steps, 1075))
-    return math.exp2(-seconds / half_life_seconds)
+    x = seconds / scale_seconds
+    if model == CURRENT_MODEL:
+        # f(0)=1, f(H)=(1+ln(2))/2=84.66%; strictly decreasing for t>0.
+        return (1.0 + x * math.log(2.0)) * math.exp2(-x)
+    # For old rule snapshots, do not change already-ended business dates.
+    return math.exp2(-x)
 
 
 def _parse_stamp(raw, tz):
@@ -145,7 +153,7 @@ def score_item(rule: dict, amount: int, events: list[dict], day: date,
         if occurred is None and rule.get("best_time"):
             unknown = True
         factor = late_factor(day, rule.get("best_time"), rule["delay_minutes"], occurred, tz,
-                             model=rule.get("model", "half_life"))
+                             model=rule.get("model", CURRENT_MODEL))
         contributions.append(take * factor)
         if occurred is not None:
             actuals.append(occurred)

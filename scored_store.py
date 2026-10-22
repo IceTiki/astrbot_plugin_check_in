@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo
 from .accounts import AccountCheckinStore
 from .store import HabitError, validate_name
 from .scoring import (DEFAULT_RULES, RENAMES, business_day, score_item, summarize,
-                      month_summary, validate_clock, validate_delay, validate_weight)
+                      month_summary, validate_clock, validate_delay, validate_weight, CURRENT_MODEL)
 
 UNSET = object()
 
@@ -37,7 +37,7 @@ class ScoredStore(AccountCheckinStore):
                     weight REAL NOT NULL CHECK(weight >= 0 AND weight <= 1000),
                     best_time TEXT, delay_minutes INTEGER NOT NULL DEFAULT 30,
                     enabled INTEGER NOT NULL, sort_order INTEGER NOT NULL,
-                    model TEXT NOT NULL DEFAULT 'half_life',
+                    model TEXT NOT NULL DEFAULT 'smooth_decay',
                     PRIMARY KEY(scope,name,since_day)
                 );
                 CREATE INDEX IF NOT EXISTS idx_habit_rules_date
@@ -50,6 +50,7 @@ class ScoredStore(AccountCheckinStore):
         for scope in scopes:
             self.ensure_rules(scope)
         self._migrate_half_life_once()
+        self._migrate_smooth_decay_once()
 
     def _migrate_half_life_once(self):
         """Transition only the current check-in day; previous rules stay frozen.
@@ -71,6 +72,28 @@ class ScoredStore(AccountCheckinStore):
                         self._write_locked(conn, scope, rule, today)
             conn.execute("INSERT INTO score_engine_migrations VALUES (?,?)",
                          ("v1.7-half-life", self.clock().isoformat(timespec="seconds")))
+
+    def _migrate_smooth_decay_once(self):
+        """Switch current (including already recorded) day to the gentler curve.
+
+        Previous days retain their original half_life/weighted/legacy model.
+        Run once per DB, so future bootstraps cannot rewrite history and
+        day-boundary changes do not repeatedly modify snapshots.
+        """
+        today = self.today()
+        with self._db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            marker = "v1.9.5-smooth-decay"
+            if conn.execute("SELECT 1 FROM score_engine_migrations WHERE name=?",
+                            (marker,)).fetchone():
+                return
+            scopes = [r[0] for r in conn.execute("SELECT scope FROM score_profiles")]
+            for scope in scopes:
+                for rule in self._rules_locked(conn, scope, today, include_disabled=True):
+                    if rule["model"] == "half_life":
+                        self._write_locked(conn, scope, dict(rule, model=CURRENT_MODEL), today)
+            conn.execute("INSERT INTO score_engine_migrations VALUES (?,?)",
+                         (marker, self.clock().isoformat(timespec="seconds")))
 
     def today(self):
         return business_day(self.clock().astimezone(self.tz))
@@ -154,17 +177,17 @@ class ScoredStore(AccountCheckinStore):
                 elif oldrow and newrow:
                     # Keep ambiguous old/new histories separate instead of adding them.
                     rule = self._rule_locked(conn, scope, old, cutover, allow_disabled=True)
-                    self._write_locked(conn, scope, dict(rule, enabled=0, model="half_life"), cutover)
-            # Existing custom tasks receive the half-life model from cutover.
+                    self._write_locked(conn, scope, dict(rule, enabled=0, model=CURRENT_MODEL), cutover)
+            # Existing custom tasks use the current gentle-decay model from cutover.
             for r in self._rules_locked(conn, scope, cutover, include_disabled=True):
-                self._write_locked(conn, scope, dict(r, model="half_life"), cutover)
+                self._write_locked(conn, scope, dict(r, model=CURRENT_MODEL), cutover)
             for order, (name, target, best, delay) in enumerate(DEFAULT_RULES):
                 conn.execute("INSERT OR IGNORE INTO habits(scope,name,target,created_by,created_at) "
                              "VALUES (?,?,?,'__system__',?)",
                              (scope, name, target, self.clock().isoformat(timespec="seconds")))
                 self._write_locked(conn, scope, {"name": name, "target": target, "weight": 1.0,
                                    "best_time": best, "delay_minutes": delay, "enabled": 1,
-                                   "sort_order": order, "model": "half_life"}, cutover)
+                                   "sort_order": order, "model": CURRENT_MODEL}, cutover)
             water = conn.execute("SELECT created_by FROM habits WHERE scope=? AND name=?",
                                  (scope, "\u559d\u6c34")).fetchone()
             if water and water["created_by"] == "__system__":
@@ -200,7 +223,7 @@ class ScoredStore(AccountCheckinStore):
     def _write_locked(conn, scope, r, day):
         conn.execute("INSERT OR REPLACE INTO habit_rules VALUES (?,?,?,?,?,?,?,?,?,?)",
                      (scope, r["name"], day.isoformat(), r["target"], r["weight"], r["best_time"],
-                      r["delay_minutes"], r["enabled"], r["sort_order"], r.get("model", "half_life")))
+                      r["delay_minutes"], r["enabled"], r["sort_order"], r.get("model", CURRENT_MODEL)))
         conn.execute("UPDATE habits SET target=?,enabled=? WHERE scope=? AND name=?",
                      (r["target"], r["enabled"], scope, r["name"]))
 
@@ -243,7 +266,7 @@ class ScoredStore(AccountCheckinStore):
                     r[k] = v
             if best_time is not UNSET:
                 r["best_time"] = best_time
-            r["model"] = "half_life"
+            r["model"] = CURRENT_MODEL
             self._write_locked(conn, scope, r, day)
         return r
 
@@ -258,7 +281,7 @@ class ScoredStore(AccountCheckinStore):
             ).fetchone()[0]
             self._write_locked(conn, scope, {"name": name, "target": target, "weight": 1.0,
                                "best_time": None, "delay_minutes": 60, "enabled": 1,
-                               "sort_order": order, "model": "half_life"}, self.today())
+                               "sort_order": order, "model": CURRENT_MODEL}, self.today())
 
     def delete_habit(self, scope, name, user_id, is_admin):
         # Each person is the owner of their own task list, regardless of scene.

@@ -65,3 +65,29 @@ No font files, tokens, personal records or user screenshots are included in the 
 - No scoring formula, database schema, task history, or stored records were changed.
 - Focused regression tests for score-proportional fill, empty/faint contrast, and the monthly summary bar pass.
 - The bundled legacy suite still has pre-existing mismatches with the current v1.9.3 code: the original archive had 49 failures / 97 passes; after this change it has the same 49 failing test identifiers and 100 passes (three new focused tests). These existing failures are not represented as passing, and the comparison does not replace live AstrBot/QQ verification.
+
+## v1.9.5 gentle-decay update (2026-10-22)
+
+- Scoring: newly effective date rules use `smooth_decay` and evaluate
+  `(1 + (t/H)*ln(2)) * 2**(-t/H)` for lateness `t>0`, with full credit
+  at/before best time. In contrast, historical `half_life` and `weighted`
+  snapshots keep the original formulas.
+- Migration: `v1.9.5-smooth-decay` marker converts only the current business
+  day's active and disabled `half_life` rule revisions. Earlier dates do not
+  change; event timestamps/counts are never altered. New accounts start
+  directly on `smooth_decay`. Existing databases receive a one-time SQLite
+  backup before this rule migration in normal AstrBot plugin startup.
+- Presentation: CLI help, task listing, native text panel, and shared
+  image-scoring inputs use the new curve and label `H` as a decay scale,
+  not an actual 50%-after-H half-life. Retired independent commands remain
+  retired; the unified `/打卡 任务 时间 ...` entry is unchanged.
+- Packaging: v1.9.5 metadata and source-only ZIP updater version checks.
+  The migration script `migrate_defaults_v193.py` now writes `smooth_decay`
+  when it intentionally resets default task rules for existing accounts.
+- Documentation: completely refreshed README with scaled, standalone
+  script-free SVG illustrations for month and daily sample status, current
+  math and scored progression tables, command reference, permissions,
+  migration and safe upgrade paths.
+- Verification: see `TEST_REPORT.txt` for focused tests and the disclosed
+  pre-existing failures of the old bundled regression suites. No live
+  AstrBot / QQ / Docker deployment has been performed.

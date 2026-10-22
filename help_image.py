@@ -69,7 +69,7 @@ def render_help_image(out_path: Path) -> str | None:
     d.text((PAD+4,151), "每日目标  /  记录  /  视图  /  好友  /  账户",
            font=_font(28), fill="#CBD9E6")
     d.rounded_rectangle((PAD,227,PAD+305,279),radius=6,fill="#255174")
-    d.text((PAD+17,233), "v1.9.4 · 完整命令", font=_font(26,True), fill="#F6FBFF")
+    d.text((PAD+17,233), "v1.9.5 · 完整命令", font=_font(26,True), fill="#F6FBFF")
     d.text((PAD+335,239), "全部正式命令 · 单次打卡只增加 1 次",
            font=_font(23), fill="#D7E4EF")
 

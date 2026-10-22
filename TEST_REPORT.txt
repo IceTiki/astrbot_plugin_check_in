@@ -1,21 +1,34 @@
-AstrBot habit check-in v1.9.4 -- monthly calendar visual regression
-Date: 2026-10-21
+AstrBot habit check-in v1.9.5 -- scoring and README preview review
+Date: 2026-10-22
+Source: user-supplied astrbot_plugin_check_in-main.zip (v1.9.4)
 
-Focused visual tests:
-- Task markers use scored percentage rather than amount/target: PASS
-- Empty and inactive/future markers have visibly different contrast: PASS
-- Monthly summary card contains a prominent thick progress bar: PASS
-Result: 3 focused tests passed.
+Changes
+- New gentle decay f(t)=(1+t*ln(2)/H)*2**(-t/H) for t>0.
+- New versioned rule model: smooth_decay; old half_life and weighted snapshots retained.
+- Current business day migration, persisted one-time marker; no event deletion.
+- v1.9.5 pre-migration SQLite snapshot on real plugin startup.
+- Updated rule explanation in the bot and README; sample SVG month/daily views.
 
-Full bundled offline suite comparison:
-- Original uploaded v1.9.3 source: 49 failed, 97 passed.
-- Modified v1.9.4 source: 49 failed, 100 passed.
-- The exact 49 failing test identifiers are identical in both runs. The source bundle contains older tests whose assumptions conflict with current defaults, commands and updater format. No claim is made that the entire bundled suite passes.
+Focused v1.9.5 tests (12): all passed.
+- Formula at negative/zero lateness and 0.25H, 0.5H, 1H, 2H, 3H.
+- Continuous, non-increasing score and legacy formula behavior.
+- New-user defaults and scored daily/month panels.
+- Existing database historical 1.9.4 day preserved / current day converted once.
+- SVG parsing, README asset references, and no SVG <script> elements.
 
-Image rendering:
-- Rendered a 1080px-wide October 2026 sample calendar with eight task markers, partial score values, larger multi-row markers, summary progress bar, thicker daily bars, and contrasting empty/future markers.
-- Preview image is a synthetic visual fixture, not a user's database export.
+Full bundled offline suite with new v1.9.5 tests:
+- 112 passed, 49 failed.
+- The original uploaded v1.9.4 bundle: 100 passed, 49 failed.
+- The same 49 test identifiers failed before and after this change.
+- Most of those pre-existing tests assume retired commands or outdated defaults.
+- Historical half_life-specific unit cases were made explicitly versioned,
+  so they continue exercising the old formula rather than the new default.
 
-Limitations:
-- No connection to the user's production AstrBot, QQ client, Docker container, or SQLite database was made.
-- QQ client rendering and production delivery remain unverified.
+Other checks
+- Python compileall: passed.
+- SVG XML parse and CairoSVG PNG-render smoke test: passed.
+- ZIP validation: final package is checked using update_source.validate_archive.
+
+Limits
+- No connection to live AstrBot, QQ clients, production Docker, or user data.
+- The SVG previews use synthetic examples, not private check-in records.

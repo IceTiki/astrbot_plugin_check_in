@@ -67,7 +67,7 @@ def main():
     print("将对所有个人账户和旧版 scope 执行以下迁移：")
     print(f"  删除「{REMOVE}」的任务定义、规则、每日记录、打卡事件")
     for name, target, best in DEFAULTS:
-        print(f"  确保 {name}: {target}/天，权重 1，最佳时间 {best or '不限时'}，半衰期 60 分钟")
+        print(f"  确保 {name}: {target}/天，权重 1，最佳时间 {best or '不限时'}，缓降尺度 H=60 分钟")
     with sqlite3.connect(str(db), timeout=30) as conn:
         conn.row_factory = sqlite3.Row
         required = {"groups", "habits", "records", "checkin_events", "habit_rules"}
@@ -176,9 +176,9 @@ def main():
                         "INSERT INTO habit_rules(scope,name,since_day,target,weight,best_time,delay_minutes,enabled,sort_order,model) "
                         "VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(scope,name,since_day) DO UPDATE SET "
                         "target=excluded.target,weight=excluded.weight,best_time=excluded.best_time,"
-                        "delay_minutes=excluded.delay_minutes,enabled=1,sort_order=excluded.sort_order,model='half_life'",
+                        "delay_minutes=excluded.delay_minutes,enabled=1,sort_order=excluded.sort_order,model='smooth_decay'",
                         (scope, name, day, target, 1.0, best, 60, 1,
-                         offset, "half_life"))
+                         offset, "smooth_decay"))
                 default_names = {item[0] for item in DEFAULTS}
                 custom_names = [r[0] for r in conn.execute(
                     "SELECT name FROM habits WHERE scope=? ORDER BY created_at,rowid", (scope,)

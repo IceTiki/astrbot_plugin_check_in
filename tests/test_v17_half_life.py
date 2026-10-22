@@ -1,4 +1,4 @@
-"""v1.7 continuous decay, settings and legacy migration integration tests.
+"""v1.7 historical half-life decay, settings and migration integration tests.
 
 The AstrBot transport is mocked: these checks do NOT prove QQ button delivery.
 """
@@ -29,7 +29,7 @@ from test_v16_scoring import D, dt, Z, WAKE, SLEEP, WORK, SPORT, item, record
     (dt(18,1,0), .125),
 ])
 def test_continuous_sleep_half_life_from_best_time(when, factor):
-    assert late_factor(D, '23:30', 30, when, Z) == pytest.approx(factor)
+    assert late_factor(D, '23:30', 30, when, Z, model='half_life') == pytest.approx(factor)
 
 
 def test_continuity_and_monotonicity_over_the_second():
@@ -43,8 +43,8 @@ def test_continuity_and_monotonicity_over_the_second():
 
 
 def test_midnight_target_anchored_to_next_calendar_day():
-    assert late_factor(D, '00:00', 30, dt(18,0,0), Z) == 1
-    assert late_factor(D, '00:00', 30, dt(18,0,30), Z) == .5
+    assert late_factor(D, '00:00', 30, dt(18,0,0), Z, model='half_life') == 1
+    assert late_factor(D, '00:00', 30, dt(18,0,30), Z, model='half_life') == .5
     assert business_day(dt(18,0,30)) == D
 
 
