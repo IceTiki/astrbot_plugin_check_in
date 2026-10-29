@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Local rendering experiments and test/coverage output (keep source scripts).
+/previews/
+/test_runtime/
+/test-results/
+/htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+junit*.xml
+pytest-report.*

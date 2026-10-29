@@ -9,6 +9,7 @@ from pathlib import Path
 from .calendar_image import Image, ImageDraw, _font, _supports_chinese, _save
 from .scoring import fmt_number, fmt_percent
 from .task_colors import task_color, task_label
+from .grade_badge import draw_grade, grade_for
 
 BG = "#1F1F1F"
 CARD = "#2D2D30"
@@ -154,7 +155,7 @@ def _draw_task_marker(draw, box, item, name, index, future):
 
 def render_weighted(out_path: Path, year: int, month: int, metrics: dict,
                     stats: dict, today: date, member_name: str, chosen=None,
-                    task_order=None):
+                    task_order=None, grade_style=None):
     """Render the month score and a fixed-color status marker for each task/day."""
     if Image is None:
         return None
@@ -239,8 +240,9 @@ def render_weighted(out_path: Path, year: int, month: int, metrics: dict,
                                    fill=CELL, outline=BLUE if is_today else "#44474D",
                                    width=2 if is_today else 1)
             _text(draw, (x + 9, y + 5), str(number), 18, BLUE if is_today else INK)
-            _text(draw, (x + cell_width - 8, y + 6), "--" if future else fmt_percent(ratio),
-                  16, score_color if not future else FAINT, "rt")
+            if grade_style != "brush":
+                _text(draw, (x + cell_width - 8, y + 6), "--" if future else fmt_percent(ratio),
+                      19, score_color if not future else FAINT, "rt")
 
             detail = "--"
             if metric and not future:
@@ -263,15 +265,37 @@ def render_weighted(out_path: Path, year: int, month: int, metrics: dict,
                 _draw_task_marker(draw, (mx, my, mx + marker_size - 1, my + marker_size - 1),
                                  by_name.get(name), name, index, future)
 
-            bar_y = y + cell_height - 10
+            brush = grade_style == "brush"
+            if brush and (not metric or metric.get("weight", 0) <= 0):
+                ratio = None
+            bar_bottom = y + cell_height - 5
+            bar_y = bar_bottom - (17 if brush else 5)
             bar_x0, bar_x1 = x + 10, x + cell_width - 10
-            draw.rounded_rectangle((bar_x0, bar_y, bar_x1, bar_y + 5), radius=3, fill=BAR_BG)
+            draw.rounded_rectangle((bar_x0, bar_y, bar_x1, bar_bottom), radius=3, fill=BAR_BG)
             if ratio is not None and not future and ratio > 0:
                 bar_width = bar_x1 - bar_x0 + 1
                 fill_width = max(2, round(bar_width * ratio))
                 draw.rounded_rectangle((bar_x0, bar_y,
                                         min(bar_x1, bar_x0 + fill_width - 1),
-                                        bar_y + 5), radius=3, fill=BLUE)
+                                        bar_bottom), radius=3, fill=BLUE)
+
+            if brush:
+                draw.text(((bar_x0 + bar_x1) / 2, (bar_y + bar_bottom) / 2),
+                          "--" if future else fmt_percent(ratio), font=_font(12),
+                          fill=INK, anchor="mm", stroke_width=1, stroke_fill="#202329")
+
+            # Brush uses the former percentage slot; older prototypes retain
+            # the narrow right edge. Awards always use the weighted score.
+            if metric and not future:
+                award_ratio = metric.get("ratio") if metric.get("weight", 0) > 0 else None
+                badge_box = ((x + 78, y + 1, x + 124, y + 47) if brush else
+                             (x + 102, y + 38, x + 128, y + cell_height - 14))
+                if brush and grade_for(award_ratio) == "OCD":
+                    # Give three letters the full header height; left-hand
+                    # date and points retain their original positions.
+                    badge_box = (x + 47, y + 1, x + 125, y + 47)
+                draw_grade(image, badge_box,
+                           award_ratio, grade_style, compact=not brush)
 
     if task_legend_count:
         for index, name in enumerate(names[:14]):

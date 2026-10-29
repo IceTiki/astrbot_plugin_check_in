@@ -21,6 +21,7 @@ except ImportError:  # Optional: text-only fallback when Pillow cannot be instal
 
 
 FONT_CANDIDATES = (
+    "C:/Windows/Fonts/msyh.ttc",
     "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
     "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
     "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",

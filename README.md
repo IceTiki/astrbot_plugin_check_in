@@ -10,14 +10,16 @@
 ## ✨ 界面预览
 
 <p align="center">
-  <img src="docs/images/monthly-preview.svg" alt="月历示例：每一天八项习惯的独立得分填充、月总进度条" width="440" />
+  <img src="docs/images/monthly-preview.svg" alt="月历示例：笔刷评级、满分 OCD、进度条内百分比与独立任务得分" width="440" />
   &nbsp;&nbsp;
-  <img src="docs/images/daily-preview.svg" alt="每日打卡示例：八项习惯的得分、时间与完成度" width="280" />
+  <img src="docs/images/daily-preview.svg" alt="每日打卡示例：纯色笔刷 OCD 评级、八项习惯的得分与完成度" width="280" />
 </p>
 
 <p align="center"><sub>左：月历视图　·　右：每日打卡视图</sub></p>
 
-**这是使用模拟数据绘制的 SVG 文档示例**，并非真实用户记录，也不是 QQ 消息截图。插件运行时的图片由 Pillow 渲染为 PNG；这两张轻量 SVG 仅用于 README 预览，点击可查看原图。
+**以上为当前渲染代码生成的模拟数据预览**，并非真实用户记录或 QQ 消息截图。图片显式启用试验样式 `grade_style="brush"`，展示纯色笔刷评级、月历完整 OCD 与进度条内百分比；正式业务调用默认仍关闭评级。SVG 内嵌 Pillow 实际输出的 PNG，确保文档与代码渲染一致。
+
+重新生成文档图片：`python tools/preview_grades.py --brush-only --readme-svg`。本地预览与测试输出由 `.gitignore` 排除，README 使用的 `docs/images/*.svg` 保留在版本控制中。
 
 ## 💎 功能亮点
 

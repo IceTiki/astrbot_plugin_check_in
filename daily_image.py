@@ -7,8 +7,9 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from .calendar_image import Image, ImageDraw, _font, _supports_chinese, _save
-from .scoring import fmt_number, fmt_percent, summarize
+from .scoring import business_day, fmt_number, fmt_percent, summarize
 from .task_colors import task_color, task_label
+from .grade_badge import draw_grade
 
 BG = "#1F1F1F"
 CARD = "#2D2D30"
@@ -105,6 +106,7 @@ def render_daily_panel(
     day: date,
     now: datetime,
     tz: ZoneInfo,
+    grade_style: str | None = None,
 ) -> str | None:
     """Render a daily scorecard. Returns None if Pillow is unavailable."""
     if Image is None:
@@ -186,4 +188,6 @@ def render_daily_panel(
         hint = "TEXT MODE: use the check-in view command; rules in settings"
     _text(draw, (margin + 12, footer_y), pending, size=16, color=INK)
     _text(draw, (margin + 12, footer_y + 26), hint, size=13, color=FAINT)
+    rating = stats["ratio"] if day <= business_day(now.astimezone(tz)) else None
+    draw_grade(image, (600, 35, 994, 158), rating, grade_style)
     return _save(image, out_path)
