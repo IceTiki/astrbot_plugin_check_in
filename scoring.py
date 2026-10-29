@@ -100,7 +100,9 @@ def late_factor(day: date, best_time: str | None, delay_minutes: int,
         occurred_at = occurred_at.replace(tzinfo=tz)
     best = at_clock(day, best_time, tz)
     seconds = (occurred_at.astimezone(tz) - best).total_seconds()
-    if seconds <= 0:
+    # HH:MM targets include their entire displayed minute. At the next
+    # minute boundary resume the existing second-precision decay curve.
+    if seconds < 60:
         return 1.0
     scale_seconds = validate_delay(delay_minutes) * 60
     x = seconds / scale_seconds

@@ -2,10 +2,10 @@
   <h1>🌱 AstrBot 习惯打卡</h1>
   <p><strong>把生活过成看得见的进步。</strong></p>
   <p>个人习惯 · 温和计分 · 每日进度 · 多彩月历 · QQ 快捷打卡</p>
-  <p><code>v1.9.7</code> · <code>AstrBot ≥ 4.17</code> · <code>SQLite</code> · <code>04:00 换日</code></p>
+  <p><code>v1.9.8</code> · <code>AstrBot ≥ 4.17</code> · <code>SQLite</code> · <code>04:00 换日</code></p>
 </div>
 
-> **v1.9.7 重点：**正式每日打卡与月历图片默认启用**纯色笔刷评级**，满分显示 **OCD**；月历右上显示评级，百分比合并至加粗进度条。保留 v1.9.6 的统一温和计分及任务排序，**计分公式与原始打卡记录不变**。
+> **v1.9.8 修复：**最佳时间所在整分钟均算准时，例如 **12:00:59 仍满分，从 12:01:00 开始扣分**。保留纯色笔刷评级、月历完整 OCD 和条内百分比；原始打卡记录不变。
 
 ## ✨ 界面预览
 
@@ -43,7 +43,7 @@ $$
 
 其中：
 
-- **\(t\)**：超出最佳时间的分钟数，即 `max(0, 实际完成时间 − 最佳时间)`；未迟到时直接计 100%。
+- **\(t\)**：超出最佳时间的分钟数，即 `max(0, 实际完成时间 − 最佳时间)`。最佳时间所在整分钟免扣分，例如 12:00:00～12:00:59.999999 均满分；从 12:01:00 起，将实际迟到分钟数代入上述曲线（12:01:00 时 t=1），之后仍按秒平滑衰减，不按整分钟跳变。
 - **\(H\)**：衰减尺度，单位分钟。默认限时任务 **H = 60**；数值越大，衰减越慢。
 - **\(f(t)\)**：本次打卡得到的满分比例，介于 0% 和 100% 之间。
 
@@ -132,7 +132,7 @@ $$
 <summary><b>📚 展开完整命令表（每日、月历、任务、记录、视图、好友、账户、群管理及调试）</b></summary>
 
 ```text
-🌱 打卡命令大全 · v1.9.7
+🌱 打卡命令大全 · v1.9.8
 每次打卡仅增加 1 次；每日 04:00 换日。
 
 【日常打卡】
@@ -298,9 +298,9 @@ docker logs --since 3m --tail=150 astrbot
 
 ```bash
 cd /opt/services/astrbot
-unzip -p /path/to/astrbot_plugin_daka_v1.9.7.zip astrbot_plugin_daka/update_source.py > /tmp/daka-update-v197.py
-python3 /tmp/daka-update-v197.py /path/to/astrbot_plugin_daka_v1.9.7.zip --check-only
-python3 /tmp/daka-update-v197.py /path/to/astrbot_plugin_daka_v1.9.7.zip
+unzip -p /path/to/astrbot_plugin_daka_v1.9.8.zip astrbot_plugin_daka/update_source.py > /tmp/daka-update-v198.py
+python3 /tmp/daka-update-v198.py /path/to/astrbot_plugin_daka_v1.9.8.zip --check-only
+python3 /tmp/daka-update-v198.py /path/to/astrbot_plugin_daka_v1.9.8.zip
 docker logs --since 3m --tail=150 astrbot
 ```
 
@@ -361,6 +361,7 @@ docker restart astrbot
 
 ## 🧭 版本记录
 
+- **v1.9.8** — 最佳时间所在整分钟不扣分，从下一分钟起按原曲线折分；历史记录、补签、每日及月历统一采用此规则，原始时间不变。
 - **v1.9.7** — 正式每日图及月历默认启用纯色笔刷七档评级；月历满分显示完整 OCD，百分比移入加粗进度条；更新 README 实际渲染预览、生成脚本及本地输出忽略规则。详见 [CHANGELOG](CHANGELOG.md)。
 - **v1.9.6** — 历史/当日/未来统一温和公式；自动备份与全历史计分模型迁移；新增任务移动/批量排序并同步每日、月历及快捷按钮。
 - **v1.9.5** — 引入温和平滑衰减公式（当时仅升级当前日）；更新 SVG 示例和 README。

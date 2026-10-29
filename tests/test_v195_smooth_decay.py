@@ -42,7 +42,9 @@ def test_new_curve_does_not_exceed_full_credit_and_is_monotone():
     checkpoints = [dt(17, 8) + timedelta(seconds=i) for i in range(0, 5 * 3600, 15)]
     values = [late_factor(D, '08:00', 60, stamp, Z) for stamp in checkpoints]
     assert values[0] == 1
-    assert all(1 >= a > b >= 0 for a, b in zip(values, values[1:]))
+    assert values[:4] == [1.] * 4  # 00 through 45 seconds are still on time.
+    assert all(1 >= a >= b >= 0 for a, b in zip(values, values[1:]))
+    assert all(a > b for a, b in zip(values[4:], values[5:]))
     assert late_factor(D, '08:00', 60, dt(19, 8), Z) >= 0
     assert all(isfinite(x) for x in values)
 

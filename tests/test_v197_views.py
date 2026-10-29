@@ -41,10 +41,10 @@ def test_month_plugin_entrypoint_renders_brush(plugin, monkeypatch, chosen):
 def test_release_metadata_help_and_changelog_agree():
     from astrbot_plugin_daka.help_content import help_text
     root = Path(__file__).resolve().parents[1]
-    assert 'version: 1.9.7' in (root / 'metadata.yaml').read_text(encoding='utf-8')
-    assert 'v1.9.7' in help_text()
+    assert 'version: 1.9.8' in (root / 'metadata.yaml').read_text(encoding='utf-8')
+    assert 'v1.9.8' in help_text()
     readme = (root / 'README.md').read_text(encoding='utf-8')
-    assert '<code>v1.9.7</code>' in readme
+    assert '<code>v1.9.8</code>' in readme
     assert '正式业务调用默认仍关闭评级' not in readme
     changes = (root / 'CHANGELOG.md').read_text(encoding='utf-8')
     assert '1.9.7' in changes and 'OCD' in changes

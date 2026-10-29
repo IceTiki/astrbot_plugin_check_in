@@ -34,7 +34,9 @@ def test_continuity_and_monotonicity_over_the_second():
     values = [late_factor(D, '08:00', 30, datetime.fromtimestamp(best.timestamp() + i, Z), Z)
               for i in range(0, 31 * 60, 15)]
     assert values[0] == 1
-    assert all(a > b > 0 for a, b in zip(values, values[1:]))
+    assert values[:4] == [1.] * 4
+    assert all(a >= b > 0 for a, b in zip(values, values[1:]))
+    assert all(a > b for a, b in zip(values[4:], values[5:]))
     assert values[1] > .99
     assert values[-1] > .49
 

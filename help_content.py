@@ -75,7 +75,7 @@ HELP_SECTIONS = (
 )
 
 def help_text() -> str:
-    lines = ["🌱 打卡命令大全 · v1.9.7", "每次打卡仅增加 1 次；每日 04:00 换日。"]
+    lines = ["🌱 打卡命令大全 · v1.9.8", "每次打卡仅增加 1 次；每日 04:00 换日。"]
     for _, heading, _, _, commands in HELP_SECTIONS:
         lines.append("\n【" + heading + "】")
         for command, description in commands:
