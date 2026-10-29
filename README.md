@@ -2,10 +2,10 @@
   <h1>🌱 AstrBot 习惯打卡</h1>
   <p><strong>把生活过成看得见的进步。</strong></p>
   <p>个人习惯 · 温和计分 · 每日进度 · 多彩月历 · QQ 快捷打卡</p>
-  <p><code>v1.9.6</code> · <code>AstrBot ≥ 4.17</code> · <code>SQLite</code> · <code>04:00 换日</code></p>
+  <p><code>v1.9.7</code> · <code>AstrBot ≥ 4.17</code> · <code>SQLite</code> · <code>04:00 换日</code></p>
 </div>
 
-> **v1.9.6 重点：**历史日期、当日与未来日期**全部统一使用温和衰减公式**，打开旧月历即可看到重算得分；新增**可自定义的任务排序**，每日视图、快捷按钮与历史月历同步。**原始打卡记录不变。**
+> **v1.9.7 重点：**正式每日打卡与月历图片默认启用**纯色笔刷评级**，满分显示 **OCD**；月历右上显示评级，百分比合并至加粗进度条。保留 v1.9.6 的统一温和计分及任务排序，**计分公式与原始打卡记录不变**。
 
 ## ✨ 界面预览
 
@@ -17,9 +17,11 @@
 
 <p align="center"><sub>左：月历视图　·　右：每日打卡视图</sub></p>
 
-**以上为当前渲染代码生成的模拟数据预览**，并非真实用户记录或 QQ 消息截图。图片显式启用试验样式 `grade_style="brush"`，展示纯色笔刷评级、月历完整 OCD 与进度条内百分比；正式业务调用默认仍关闭评级。SVG 内嵌 Pillow 实际输出的 PNG，确保文档与代码渲染一致。
+**以上为当前渲染代码生成的模拟数据预览**，并非真实用户记录或 QQ 消息截图。v1.9.7 正式业务图片使用 `brush` 样式，展示纯色笔刷评级、月历完整 OCD 与进度条内百分比。SVG 内嵌 Pillow 实际输出的 PNG，确保文档与代码渲染一致。
 
 重新生成文档图片：`python tools/preview_grades.py --brush-only --readme-svg`。本地预览与测试输出由 `.gitignore` 排除，README 使用的 `docs/images/*.svg` 保留在版本控制中。
+
+评级按实际得分 ÷ 可得分判断：**OCD＝满分、S≥95%、A≥85%、B≥70%、C≥50%、D≥25%、E＜25%**，使用未取整的比例，满分沿用浮点容差。任务全部完成但发生迟到扣分时，不会仅凭完成次数获得 OCD；未来日和无计分任务日期不授予评级。
 
 ## 💎 功能亮点
 
@@ -130,7 +132,7 @@ $$
 <summary><b>📚 展开完整命令表（每日、月历、任务、记录、视图、好友、账户、群管理及调试）</b></summary>
 
 ```text
-🌱 打卡命令大全 · v1.9.6
+🌱 打卡命令大全 · v1.9.7
 每次打卡仅增加 1 次；每日 04:00 换日。
 
 【日常打卡】
@@ -296,9 +298,9 @@ docker logs --since 3m --tail=150 astrbot
 
 ```bash
 cd /opt/services/astrbot
-unzip -p /path/to/astrbot_plugin_daka_v1.9.6.zip astrbot_plugin_daka/update_source.py > /tmp/daka-update-v196.py
-python3 /tmp/daka-update-v196.py /path/to/astrbot_plugin_daka_v1.9.6.zip --check-only
-python3 /tmp/daka-update-v196.py /path/to/astrbot_plugin_daka_v1.9.6.zip
+unzip -p /path/to/astrbot_plugin_daka_v1.9.7.zip astrbot_plugin_daka/update_source.py > /tmp/daka-update-v197.py
+python3 /tmp/daka-update-v197.py /path/to/astrbot_plugin_daka_v1.9.7.zip --check-only
+python3 /tmp/daka-update-v197.py /path/to/astrbot_plugin_daka_v1.9.7.zip
 docker logs --since 3m --tail=150 astrbot
 ```
 
@@ -359,6 +361,7 @@ docker restart astrbot
 
 ## 🧭 版本记录
 
+- **v1.9.7** — 正式每日图及月历默认启用纯色笔刷七档评级；月历满分显示完整 OCD，百分比移入加粗进度条；更新 README 实际渲染预览、生成脚本及本地输出忽略规则。详见 [CHANGELOG](CHANGELOG.md)。
 - **v1.9.6** — 历史/当日/未来统一温和公式；自动备份与全历史计分模型迁移；新增任务移动/批量排序并同步每日、月历及快捷按钮。
 - **v1.9.5** — 引入温和平滑衰减公式（当时仅升级当前日）；更新 SVG 示例和 README。
 - **v1.9.4** — 月历按实际得分比例填充方格；任务方格多行放大；强化总完成度进度条、未完成/未来状态区分。

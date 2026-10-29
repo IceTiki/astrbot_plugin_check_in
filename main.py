@@ -291,9 +291,10 @@ class GroupDaka(Star):
 
     def _make_daily_image(self, scope, sender, nick, today):
         items = self.store.daily(scope, sender, today)
-        path = cache_file(self.data_dir / "cache", scope, sender, today.isoformat(), "daily-v180")
+        path = cache_file(self.data_dir / "cache", scope, sender, today.isoformat(), "daily-v197-brush")
         try:
-            return render_daily_panel(path, items, nick, today, self._now(), self.tz)
+            return render_daily_panel(path, items, nick, today, self._now(), self.tz,
+                                      grade_style="brush")
         except Exception as exc:
             logger.warning("[daka 1.8] Daily image render failed: %s", safe_error(exc))
             return None
@@ -1437,10 +1438,10 @@ class GroupDaka(Star):
         days, stats = self.store.month_scores(scope, user_id, year, month, today, habit_name)
         text = weighted_text(year, month, days, stats, today, habit_name)
         path = cache_file(self.data_dir / "cache", scope, user_id,
-                          f"{year}-{month:02d}", "weighted-" + (habit_name or "all"))
+                          f"{year}-{month:02d}", "weighted-v197-brush-" + (habit_name or "all"))
         try:
             image = render_weighted(path, year, month, days, stats, today, name, habit_name,
-                                    task_order=self.store.task_order(scope))
+                                    task_order=self.store.task_order(scope), grade_style="brush")
         except Exception as exc:
             logger.warning('[daka 1.7] Calendar render failed: %s', safe_error(exc))
             image = None

@@ -197,7 +197,9 @@ def test_readme_and_version_explain_unified_history_and_sort():
     assert '/打卡 任务 排序 运动 2' in doc
     assert '原始打卡记录不变' in doc
     assert '按打卡日安全迁移' not in doc
-    assert 'version: 1.9.6' in (root/'metadata.yaml').read_text(encoding='utf-8')
+    version_line = next(line for line in (root/'metadata.yaml').read_text(encoding='utf-8').splitlines()
+                        if line.startswith('version:'))
+    assert tuple(map(int, version_line.split(':', 1)[1].strip().split('.'))) >= (1, 9, 6)
 
 
 def test_v196_bootstrap_backup_captures_old_sqlite_before_history_rewrite(tmp_path, monkeypatch):
