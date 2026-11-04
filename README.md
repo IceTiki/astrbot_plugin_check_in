@@ -2,10 +2,10 @@
   <h1>🌱 AstrBot 习惯打卡</h1>
   <p><strong>把生活过成看得见的进步。</strong></p>
   <p>个人习惯 · 温和计分 · 每日进度 · 多彩月历 · QQ 快捷打卡</p>
-  <p><code>v1.9.9</code> · <code>AstrBot ≥ 4.17</code> · <code>SQLite</code> · <code>04:00 换日</code></p>
+  <p><code>v1.9.10</code> · <code>AstrBot ≥ 4.17</code> · <code>SQLite</code> · <code>04:00 换日</code></p>
 </div>
 
-> **v1.9.9** 每月按累计得分与可得分显示月综合评级。命令输入有误时，指针标出位置，每种格式单独一行，最后给出一条示例。
+> **v1.9.10** 每月按累计得分与可得分显示月综合评级。命令输入有误时，指针标出位置，每种格式单独一行，最后给出一条示例。
 
 ## ✨ 界面预览
 
@@ -132,7 +132,7 @@ $$
 <summary><b>📚 展开完整命令表（每日、月历、任务、记录、视图、好友、账户、群管理及调试）</b></summary>
 
 ```text
-🌱 打卡命令大全 · v1.9.9
+🌱 打卡命令大全 · v1.9.10
 每次打卡仅增加 1 次；每日 04:00 换日。
 
 【日常打卡】
@@ -298,9 +298,9 @@ docker logs --since 3m --tail=150 astrbot
 
 ```bash
 cd /opt/services/astrbot
-unzip -p /path/to/astrbot_plugin_daka_v1.9.9.zip astrbot_plugin_daka/update_source.py > /tmp/daka-update-v199.py
-python3 /tmp/daka-update-v199.py /path/to/astrbot_plugin_daka_v1.9.9.zip --check-only
-python3 /tmp/daka-update-v199.py /path/to/astrbot_plugin_daka_v1.9.9.zip
+unzip -p /path/to/astrbot_plugin_daka_v1.9.10.zip astrbot_plugin_daka/update_source.py > /tmp/daka-update-v1910.py
+python3 /tmp/daka-update-v1910.py /path/to/astrbot_plugin_daka_v1.9.10.zip --check-only
+python3 /tmp/daka-update-v1910.py /path/to/astrbot_plugin_daka_v1.9.10.zip
 docker logs --since 3m --tail=150 astrbot
 ```
 
@@ -361,6 +361,7 @@ docker restart astrbot
 
 ## 🧭 版本记录
 
+- **v1.9.10** — 月综合评级在卡片正文中居中。
 - **v1.9.9** — 月综合评级与命令输入定位提示。
 - **v1.9.8** — 最佳时间所在整分钟不扣分，从下一分钟起按原曲线折分；历史记录、补签、每日及月历统一采用此规则，原始打卡记录不变。
 - **v1.9.7** — 正式每日图及月历默认启用纯色笔刷七档评级；月历满分显示完整 OCD，百分比移入加粗进度条；更新 README 实际渲染预览、生成脚本及本地输出忽略规则。详见 [CHANGELOG](CHANGELOG.md)。

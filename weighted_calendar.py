@@ -203,8 +203,11 @@ def render_weighted(out_path: Path, year: int, month: int, metrics: dict,
     for x, label, value in summary_cards:
         draw.rounded_rectangle((x, 154, x + 308, 264), radius=12, fill="#34363B")
         _text(draw, (x + 18, 164), label, 15, MUTED)
-        if x == 716 and value != "--":
-            draw_grade(image, (x + 18, 186, x + 185, 257), stats["ratio"], "brush")
+        if x == 716:
+            if value == "--":
+                _text(draw, (x + 154, 222), value, 27, INK, "mm")
+            else:
+                draw_grade(image, (x + 18, 186, x + 290, 257), stats["ratio"], "brush")
             continue
         is_month_score = x == 56
         size = 40 if is_month_score else 27
