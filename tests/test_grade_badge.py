@@ -165,19 +165,21 @@ def test_brush_bar_labels_and_optional_awards(tmp_path, monkeypatch):
                                     "模拟", grade_style="brush")
     assert [s for s, _, _ in labels[:7]] == ["0%", "<0.1%", "99.9%", "100%", "--", "--", "--"]
     assert all(color == preview.monthly.INK and stroke == 1 for _, color, stroke in labels)
-    assert awards == [0., .00001, .99999, 1., None]
+    assert awards == [preview.scoring.month_summary(metrics)['ratio'], 0., .00001, .99999, 1., None]
 
 
 def test_brush_calendar_uses_full_ocd(tmp_path, monkeypatch):
     from datetime import date
     calls = []
     monkeypatch.setattr(preview.monthly, "draw_grade", lambda image, box, ratio, style, **kw:
-                        calls.append((box, ratio, kw["compact"])))
+                        calls.append((box, ratio, kw.get("compact", False))))
     metrics = {1: preview.scoring.summarize(preview.sample_items())}
     preview.monthly.render_weighted(tmp_path / "full.png", 2026, 10, metrics,
                                     preview.scoring.month_summary(metrics), date(2026, 10, 1),
                                     "模拟", grade_style="brush")
-    box, ratio, compact = calls[0]
+    month_badge, day_badge = calls
+    assert month_badge[1:] == (1., False)
+    box, ratio, compact = day_badge
     assert ratio == 1. and compact is False
     assert box[2] - box[0] == 78
 

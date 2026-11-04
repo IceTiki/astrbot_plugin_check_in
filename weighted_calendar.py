@@ -73,6 +73,7 @@ def weighted_text(year, month, metrics, stats, today, chosen=None):
     title = chosen or "\u5168\u90e8\u4efb\u52a1"
     lines = [f"{year}-{month:02d} · {title}",
              f"{fmt_percent(stats['ratio'])} · {fmt_number(stats['earned'])}/{fmt_number(stats['weight'])} \u5206",
+             f"月综合评级：{grade_for(stats['ratio']) or '--'}",
              "\u4e00\uff5c\u4e8c\uff5c\u4e09\uff5c\u56db\uff5c\u4e94\uff5c\u516d\uff5c\u65e5"]
     for week in calendar.Calendar(firstweekday=0).monthdayscalendar(year, month):
         cells = []
@@ -198,11 +199,13 @@ def render_weighted(out_path: Path, year: int, month: int, metrics: dict,
         (56, "\u672c\u6708\u5b8c\u6210\u5ea6" if cn else "MONTH SCORE", fmt_percent(stats["ratio"])),
         (386, "\u5f97\u5206 / \u53ef\u5f97\u5206" if cn else "POINTS / POSSIBLE",
          f"{fmt_number(stats['earned'])} / {fmt_number(stats['weight'])}"),
-        (716, "\u6ee1\u5206\u65e5 / \u8ba1\u5206\u65e5" if cn else "FULL / TRACKED DAYS",
-         f"{stats['full_days']} / {stats['days']}")]
+        (716, "月综合评级" if cn else "MONTH GRADE", grade_for(stats["ratio"]) or "--")]
     for x, label, value in summary_cards:
         draw.rounded_rectangle((x, 154, x + 308, 264), radius=12, fill="#34363B")
         _text(draw, (x + 18, 164), label, 15, MUTED)
+        if x == 716 and value != "--":
+            draw_grade(image, (x + 18, 186, x + 185, 257), stats["ratio"], "brush")
+            continue
         is_month_score = x == 56
         size = 40 if is_month_score else 27
         while size > (22 if is_month_score else 15) and draw.textbbox((0, 0), value, font=_font(size))[2] > 270:

@@ -26,6 +26,7 @@ from astrbot.core.utils.astrbot_path import get_astrbot_data_path
 from .calendar_image import cache_file
 from .help_content import HELP_TEXT
 from .help_image import render_help_image
+from .command_feedback import command_feedback
 from .daily_image import render_daily_panel
 from .store import HabitError, validate_day, validate_month
 from .accounts import identity_aliases
@@ -650,6 +651,7 @@ class GroupDaka(Star):
                     'group' if is_group else 'c2c',
                     command.split(' ', 1)[0] if command else 'today')
         try:
+            input_failed = False
             try:
                 account_id = self._resolve_person(origin, raw_sender, is_group,
                                                   union_openid, adapter_type, app_id)
@@ -689,14 +691,19 @@ class GroupDaka(Star):
                     if calendar_request and self._display_mode(scope, origin, 'month') == 'text':
                         img = None
             except HabitError as exc:
-                reply, img = f"⚠️ {exc}", None
+                input_failed = True
+                reply = command_feedback(str(event.message_str or ""), command, str(exc),
+                                         self.store.task_order(scope) if scope else [], self._today())
+                img = None
                 calendar_request = help_request = False
             except Exception:
                 logger.exception("[daka 1.9] Command processing failed")
                 reply, img = "⚠️ 处理失败，请查看 AstrBot 日志。", None
                 calendar_request = help_request = False
 
-            if help_request:
+            if input_failed:
+                await self._send_plain(event, reply)
+            elif help_request:
                 await self._send_help(event, scope, origin)
             elif calendar_request:
                 await self._send_calendar(event, reply, img)
